@@ -22,7 +22,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import Config
-from core.polymarket_client import get_polymarket_client
+from core.polymarket_client import get_polymarket_client, init_polymarket_client
 from core.favorites_db import get_favorites_db
 from bot.keyboards.inline import main_menu_keyboard
 
@@ -47,6 +47,14 @@ from bot.handlers.favorites import (
     fav_add_callback, fav_view_callback, fav_del_callback
 )
 from bot.handlers.wallet import balance_command, balance_callback
+from bot.handlers.orders import (
+    orders_command, orders_callback, cancel_order_callback,
+    cancel_all_callback, order_book_callback
+)
+from bot.handlers.alerts import (
+    alerts_command, alert_command, stoploss_command, takeprofit_command,
+    delete_alert_callback, alerts_callback
+)
 
 
 # Logging
@@ -164,6 +172,14 @@ def main():
     # Build application
     app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
     
+    # Initialize async components on startup
+    async def post_init(application):
+        """Initialize async components like loading paper positions."""
+        await init_polymarket_client()
+        print("✅ Polymarket client initialized with persisted positions")
+    
+    app.post_init = post_init
+    
     # ═══════════════════════════════════════════════════════════════════
     # COMMAND HANDLERS
     # ═══════════════════════════════════════════════════════════════════
@@ -176,6 +192,58 @@ def main():
     app.add_handler(CommandHandler("info", info_command))
     app.add_handler(CommandHandler("favorites", favorites_command))
     app.add_handler(CommandHandler("hot", hot_command))
+    app.add_handler(CommandHandler("orders", orders_command))
+    app.add_handler(CommandHandler("alerts", alerts_command))
+    app.add_handler(CommandHandler("alert", alert_command))
+    app.add_handler(CommandHandler("stoploss", stoploss_command))
+    app.add_handler(CommandHandler("takeprofit", takeprofit_command))
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # CONVERSATION HANDLERS (must be BEFORE regular callback handlers)
+    # These capture text input for custom amount/percentage
+    # ═══════════════════════════════════════════════════════════════════
+    
+    # ConversationHandler for custom buy amount
+    custom_amount_handler = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(amount_callback, pattern="^amt_custom$")
+        ],
+        states={
+            CUSTOM_AMOUNT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, custom_amount_input)
+            ]
+        },
+        fallbacks=[
+            CommandHandler("buy", buy_command),
+            CommandHandler("start", start_command),
+            CommandHandler("cancel", start_command),
+            CallbackQueryHandler(menu_callback, pattern="^menu$")
+        ],
+        name="custom_amount_conversation",
+        persistent=False
+    )
+    app.add_handler(custom_amount_handler)
+    
+    # ConversationHandler for custom sell percentage
+    custom_sell_handler = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(sell_callback, pattern=r"^sell_\d+_custom$")
+        ],
+        states={
+            CUSTOM_SELL_PERCENT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, custom_sell_input)
+            ]
+        },
+        fallbacks=[
+            CommandHandler("positions", positions_command),
+            CommandHandler("start", start_command),
+            CommandHandler("cancel", start_command),
+            CallbackQueryHandler(menu_callback, pattern="^menu$")
+        ],
+        name="custom_sell_conversation",
+        persistent=False
+    )
+    app.add_handler(custom_sell_handler)
     
     # ═══════════════════════════════════════════════════════════════════
     # CALLBACK HANDLERS
@@ -190,9 +258,9 @@ def main():
     app.add_handler(CallbackQueryHandler(favorites_callback, pattern="^favorites$"))
     app.add_handler(CallbackQueryHandler(hot_callback, pattern="^hot$"))
     
-    # Position handlers
+    # Position handlers (non-custom - custom is handled by ConversationHandler above)
     app.add_handler(CallbackQueryHandler(position_detail_callback, pattern=r"^pos_\d+$"))
-    app.add_handler(CallbackQueryHandler(sell_callback, pattern=r"^sell_\d+_"))
+    app.add_handler(CallbackQueryHandler(sell_callback, pattern=r"^sell_\d+_(?!custom)\w+$"))
     app.add_handler(CallbackQueryHandler(confirm_sell_callback, pattern=r"^csell_\d+_\d+$"))
     
     # Trading handlers - EVENT BASED FLOW
@@ -209,9 +277,9 @@ def main():
     app.add_handler(CallbackQueryHandler(back_sub_callback, pattern="^back_sub$"))
     app.add_handler(CallbackQueryHandler(back_out_callback, pattern="^back_out$"))
     
-    # Trading flow
+    # Trading flow (non-custom amounts - custom is handled by ConversationHandler)
     app.add_handler(CallbackQueryHandler(outcome_callback, pattern="^out_"))
-    app.add_handler(CallbackQueryHandler(amount_callback, pattern="^amt_"))
+    app.add_handler(CallbackQueryHandler(amount_callback, pattern=r"^amt_(?!custom)\w+$"))
     app.add_handler(CallbackQueryHandler(execute_buy_callback, pattern="^exec_buy$"))
     
     # Legacy market handlers (for search results)
@@ -222,6 +290,16 @@ def main():
     app.add_handler(CallbackQueryHandler(fav_add_callback, pattern="^fav_add$"))
     app.add_handler(CallbackQueryHandler(fav_view_callback, pattern=r"^fv_\d+$"))
     app.add_handler(CallbackQueryHandler(fav_del_callback, pattern=r"^fd_\d+$"))
+    
+    # Orders handlers
+    app.add_handler(CallbackQueryHandler(orders_callback, pattern="^orders$"))
+    app.add_handler(CallbackQueryHandler(order_book_callback, pattern="^orderbook$"))
+    app.add_handler(CallbackQueryHandler(cancel_order_callback, pattern="^cancel_"))
+    app.add_handler(CallbackQueryHandler(cancel_all_callback, pattern="^cancel_all$"))
+    
+    # Alerts handlers
+    app.add_handler(CallbackQueryHandler(alerts_callback, pattern="^alerts$"))
+    app.add_handler(CallbackQueryHandler(delete_alert_callback, pattern="^del_alert_"))
     
     # Error handler
     app.add_error_handler(error_handler)
