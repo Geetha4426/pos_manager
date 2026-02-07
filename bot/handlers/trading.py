@@ -1,8 +1,8 @@
 """
 Trading Handlers
 
-Handles /buy command with category selection flow.
-Uses index-based callbacks with context storage.
+Handles /buy command with EVENT-based sports navigation.
+Shows: Sport → Events (matches) → Sub-Markets (toss, top scorer, etc.) → Yes/No
 """
 
 from telegram import Update
@@ -15,8 +15,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from config import Config
 from core.polymarket_client import get_polymarket_client
 from bot.keyboards.inline import (
-    category_keyboard, sports_keyboard, markets_keyboard,
-    outcome_keyboard, amount_keyboard, buy_confirm_keyboard
+    category_keyboard, sports_keyboard, events_keyboard, sub_markets_keyboard,
+    outcome_keyboard, amount_keyboard, buy_confirm_keyboard, markets_keyboard
 )
 
 
@@ -58,7 +58,7 @@ async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = """
 🏆 <b>Select Sport</b>
 
-Choose a sport to browse markets:
+Choose a sport to see available matches:
 """
         await query.edit_message_text(
             text,
@@ -92,9 +92,9 @@ Found {len(markets)} markets:
 
 
 async def sport_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle sport selection."""
+    """Handle sport selection - fetch EVENTS (matches)."""
     query = update.callback_query
-    await query.answer("🔍 Loading markets...")
+    await query.answer("🔍 Loading events...")
     
     sport = query.data.split('_')[1]  # sp_cricket -> cricket
     context.user_data['sport'] = sport
@@ -102,91 +102,138 @@ async def sport_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sport_emoji = Config.get_sport_emoji(sport)
     
     client = get_polymarket_client()
-    markets = await client.get_sports_markets(sport=sport, limit=20)
-    context.user_data['markets'] = markets
     
-    if not markets:
-        # Try broader search
-        markets = await client.search_markets(sport, limit=15)
-        context.user_data['markets'] = markets
+    # Fetch EVENTS (not just markets)
+    events = await client.get_sports_events(sport=sport, limit=15)
+    context.user_data['events'] = events
     
-    if not markets:
+    if not events:
         await query.edit_message_text(
-            f"📭 No active {sport} markets found.\n\nTry /search <query>",
+            f"📭 No active {sport.upper()} events found.\n\nTry /search {sport}",
             reply_markup=sports_keyboard()
         )
         return
     
     text = f"""
-{sport_emoji} <b>{sport.upper()} Markets</b>
+{sport_emoji} <b>{sport.upper()} Events</b>
 
-Found {len(markets)} active markets:
+Found {len(events)} active matches/events:
+
+<i>Tap an event to see betting options</i>
 """
     
     await query.edit_message_text(
         text,
         parse_mode='HTML',
-        reply_markup=markets_keyboard(markets)
+        reply_markup=events_keyboard(events)
     )
 
 
-async def page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle pagination."""
+async def events_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle events pagination."""
     query = update.callback_query
     await query.answer()
     
-    page = int(query.data.split('_')[1])  # pg_1 -> 1
-    markets = context.user_data.get('markets', [])
-    
+    page = int(query.data.split('_')[1])  # evp_1 -> 1
+    events = context.user_data.get('events', [])
     sport = context.user_data.get('sport', 'sports')
     sport_emoji = Config.get_sport_emoji(sport)
     
     text = f"""
-{sport_emoji} <b>{sport.upper()} Markets</b>
+{sport_emoji} <b>{sport.upper()} Events</b>
 
-Found {len(markets)} active markets (Page {page + 1}):
+Found {len(events)} active matches (Page {page + 1}):
 """
     
     await query.edit_message_text(
         text,
         parse_mode='HTML',
-        reply_markup=markets_keyboard(markets, page=page)
+        reply_markup=events_keyboard(events, page=page)
     )
 
 
-async def market_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle market selection - show Yes/No options."""
+async def event_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle event selection - show SUB-MARKETS."""
     query = update.callback_query
     await query.answer()
     
-    # Get market by index from context
-    idx = int(query.data.split('_')[1])  # mkt_0 -> 0
-    markets = context.user_data.get('markets', [])
+    # Get event by index
+    idx = int(query.data.split('_')[1])  # evt_0 -> 0
+    events = context.user_data.get('events', [])
     
-    if idx >= len(markets):
-        await query.edit_message_text("⚠️ Market not found. Try again with /buy")
+    if idx >= len(events):
+        await query.edit_message_text("⚠️ Event not found. Try again with /buy")
         return
     
-    market = markets[idx]
-    context.user_data['selected_market'] = market
-    context.user_data['selected_market_index'] = idx
+    event = events[idx]
+    context.user_data['selected_event'] = event
+    context.user_data['selected_event_index'] = idx
+    
+    sub_markets = event.markets
+    
+    if not sub_markets:
+        await query.edit_message_text(
+            f"📭 No betting options found for this event.\n\nTry another match.",
+            reply_markup=events_keyboard(events)
+        )
+        return
+    
+    text = f"""
+📊 <b>{event.title}</b>
+
+<b>Available Betting Options:</b>
+
+<i>Select a market to trade:</i>
+"""
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=sub_markets_keyboard(sub_markets, idx)
+    )
+
+
+async def sub_market_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle sub-market selection - show Yes/No."""
+    query = update.callback_query
+    await query.answer()
+    
+    # Parse: sub_0_1 -> event_idx=0, sub_idx=1
+    parts = query.data.split('_')
+    event_idx = int(parts[1])
+    sub_idx = int(parts[2])
+    
+    events = context.user_data.get('events', [])
+    if event_idx >= len(events):
+        await query.edit_message_text("⚠️ Event not found. Start over with /buy")
+        return
+    
+    event = events[event_idx]
+    sub_markets = event.markets
+    
+    if sub_idx >= len(sub_markets):
+        await query.edit_message_text("⚠️ Market not found. Start over with /buy")
+        return
+    
+    sub = sub_markets[sub_idx]
+    context.user_data['selected_sub_market'] = sub
+    context.user_data['selected_market'] = sub  # Legacy compatibility
     
     # Calculate implied probabilities
-    yes_prob = market.yes_price * 100
-    no_prob = market.no_price * 100
+    yes_prob = sub.yes_price * 100
+    no_prob = sub.no_price * 100
     
     text = f"""
 📊 <b>Market Details</b>
 
-📋 <b>{market.question}</b>
+📋 <b>{event.title}</b>
+🎯 <b>{sub.group_item_title or sub.question}</b>
 
 💹 <b>Prices:</b>
-   ✅ YES: {yes_prob:.0f}¢ (${market.yes_price:.2f})
-   ❌ NO: {no_prob:.0f}¢ (${market.no_price:.2f})
+   ✅ YES: {yes_prob:.0f}¢ (${sub.yes_price:.2f})
+   ❌ NO: {no_prob:.0f}¢ (${sub.no_price:.2f})
 
-📈 <b>Volume:</b> ${market.volume:,.0f}
-
-<b>Select outcome to buy:</b>
+<b>Select your position:</b>
 """
     
     await query.edit_message_text(
@@ -196,35 +243,86 @@ async def market_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def back_events_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Go back to events list."""
+    query = update.callback_query
+    await query.answer()
+    
+    events = context.user_data.get('events', [])
+    sport = context.user_data.get('sport', 'sports')
+    sport_emoji = Config.get_sport_emoji(sport)
+    
+    text = f"""
+{sport_emoji} <b>{sport.upper()} Events</b>
+
+Found {len(events)} active matches:
+"""
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=events_keyboard(events)
+    )
+
+
+async def back_sub_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Go back to sub-markets."""
+    query = update.callback_query
+    await query.answer()
+    
+    event = context.user_data.get('selected_event')
+    event_idx = context.user_data.get('selected_event_index', 0)
+    
+    if not event:
+        await back_events_callback(update, context)
+        return
+    
+    text = f"""
+📊 <b>{event.title}</b>
+
+<b>Available Betting Options:</b>
+"""
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=sub_markets_keyboard(event.markets, event_idx)
+    )
+
+
 async def outcome_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle outcome selection - show amount options."""
+    """Handle outcome selection (Yes/No) - show amount options."""
     query = update.callback_query
     await query.answer()
     
     outcome = query.data.split('_')[1].upper()  # out_yes -> YES
     
-    market = context.user_data.get('selected_market')
-    if not market:
+    sub = context.user_data.get('selected_sub_market')
+    if not sub:
         await query.edit_message_text("⚠️ Market not found. Start over with /buy")
         return
     
     # Get the correct token and price
     if outcome == 'YES':
-        token_id = market.yes_token_id
-        price = market.yes_price
+        token_id = sub.yes_token_id
+        price = sub.yes_price
     else:
-        token_id = market.no_token_id
-        price = market.no_price
+        token_id = sub.no_token_id
+        price = sub.no_price
     
     context.user_data['selected_token_id'] = token_id
     context.user_data['selected_outcome'] = outcome
     context.user_data['selected_price'] = price
     
+    event = context.user_data.get('selected_event')
+    event_title = event.title if event else sub.question
+    
     text = f"""
 💵 <b>Enter Amount</b>
 
-📋 {market.question}
-🎯 <b>Buying:</b> {outcome} @ ${price:.2f}
+📋 {event_title}
+🎯 <b>{sub.group_item_title or sub.question}</b>
+📍 <b>Buying:</b> {outcome} @ ${price:.2f}
 
 <b>Select amount (USD):</b>
 """
@@ -233,6 +331,43 @@ async def outcome_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text,
         parse_mode='HTML',
         reply_markup=amount_keyboard()
+    )
+
+
+async def back_out_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Go back to outcome selection."""
+    query = update.callback_query
+    await query.answer()
+    
+    sub = context.user_data.get('selected_sub_market')
+    event = context.user_data.get('selected_event')
+    
+    if not sub:
+        await buy_command(update, context)
+        return
+    
+    yes_prob = sub.yes_price * 100
+    no_prob = sub.no_price * 100
+    
+    event_title = event.title if event else sub.question
+    
+    text = f"""
+📊 <b>Market Details</b>
+
+📋 <b>{event_title}</b>
+🎯 <b>{sub.group_item_title or sub.question}</b>
+
+💹 <b>Prices:</b>
+   ✅ YES: {yes_prob:.0f}¢
+   ❌ NO: {no_prob:.0f}¢
+
+<b>Select your position:</b>
+"""
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=outcome_keyboard()
     )
 
 
@@ -256,11 +391,12 @@ async def amount_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_buy_confirmation(query, context, amount: float):
     """Show buy confirmation screen."""
-    market = context.user_data.get('selected_market')
+    sub = context.user_data.get('selected_sub_market')
+    event = context.user_data.get('selected_event')
     outcome = context.user_data.get('selected_outcome', 'YES')
     price = context.user_data.get('selected_price', 0.5)
     
-    if not market:
+    if not sub:
         await query.edit_message_text("⚠️ Market not found. Start over with /buy")
         return
     
@@ -269,15 +405,17 @@ async def show_buy_confirmation(query, context, amount: float):
     context.user_data['buy_amount'] = amount
     
     mode_text = "📝 PAPER" if Config.is_paper_mode() else "💱 LIVE"
+    event_title = event.title if event else sub.question
     
     text = f"""
 🚀 <b>Confirm Buy Order</b>
 
-📋 <b>{market.question}</b>
+📋 <b>{event_title}</b>
+🎯 <b>{sub.group_item_title or sub.question}</b>
 
-🎯 <b>Outcome:</b> {outcome}
-📍 <b>Price:</b> ${price:.4f}
-💵 <b>Amount:</b> ${amount:.2f}
+📍 <b>Outcome:</b> {outcome}
+💵 <b>Price:</b> ${price:.4f}
+💰 <b>Amount:</b> ${amount:.2f}
 📦 <b>Est. Shares:</b> {est_shares:.2f}
 
 <b>Mode:</b> {mode_text}
@@ -297,10 +435,10 @@ async def execute_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     await query.answer("⚡ Executing buy...")
     
-    # Get all data from context
     token_id = context.user_data.get('selected_token_id')
     amount = context.user_data.get('buy_amount')
-    market = context.user_data.get('selected_market')
+    sub = context.user_data.get('selected_sub_market')
+    event = context.user_data.get('selected_event')
     outcome = context.user_data.get('selected_outcome', 'YES')
     
     if not token_id or not amount:
@@ -308,8 +446,8 @@ async def execute_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     
     market_info = {
-        'condition_id': market.condition_id if market else '',
-        'question': market.question if market else 'Unknown',
+        'condition_id': sub.condition_id if sub else '',
+        'question': event.title if event else (sub.question if sub else 'Unknown'),
         'outcome': outcome
     }
     
@@ -317,11 +455,15 @@ async def execute_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     result = await client.buy_market(token_id, amount, market_info=market_info)
     
     if result.success:
+        event_title = event.title if event else (sub.question if sub else 'Position')
+        sub_title = sub.group_item_title or sub.question if sub else ''
+        
         text = f"""
 ✅ <b>Buy Executed!</b>
 
-📋 {market.question if market else 'Position'}
-🎯 <b>Outcome:</b> {outcome}
+📋 {event_title}
+🎯 {sub_title}
+📍 <b>Outcome:</b> {outcome}
 
 📦 <b>Shares:</b> {result.filled_size:.2f}
 💵 <b>Avg Price:</b> ${result.avg_price:.4f}
@@ -343,6 +485,78 @@ Please try again.
     await query.edit_message_text(text, parse_mode='HTML')
 
 
+# Legacy market_callback for non-event markets (search results)
+async def market_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle market selection from search results."""
+    query = update.callback_query
+    await query.answer()
+    
+    idx = int(query.data.split('_')[1])  # mkt_0 -> 0
+    markets = context.user_data.get('markets', [])
+    
+    if idx >= len(markets):
+        await query.edit_message_text("⚠️ Market not found. Try again with /buy")
+        return
+    
+    market = markets[idx]
+    
+    # Convert to sub-market for compatibility
+    from core.polymarket_client import SubMarket
+    sub = SubMarket(
+        condition_id=market.condition_id,
+        question=market.question,
+        yes_token_id=market.yes_token_id,
+        no_token_id=market.no_token_id,
+        yes_price=market.yes_price,
+        no_price=market.no_price,
+        group_item_title=''
+    )
+    
+    context.user_data['selected_sub_market'] = sub
+    context.user_data['selected_market'] = market
+    context.user_data['selected_event'] = None  # No parent event
+    
+    yes_prob = market.yes_price * 100
+    no_prob = market.no_price * 100
+    
+    text = f"""
+📊 <b>Market Details</b>
+
+📋 <b>{market.question}</b>
+
+💹 <b>Prices:</b>
+   ✅ YES: {yes_prob:.0f}¢ (${market.yes_price:.2f})
+   ❌ NO: {no_prob:.0f}¢ (${market.no_price:.2f})
+
+📈 <b>Volume:</b> ${market.volume:,.0f}
+
+<b>Select your position:</b>
+"""
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=outcome_keyboard()
+    )
+
+
+async def page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle legacy pagination."""
+    query = update.callback_query
+    await query.answer()
+    
+    page = int(query.data.split('_')[1])
+    markets = context.user_data.get('markets', [])
+    
+    text = f"📊 <b>Markets</b>\n\nPage {page + 1}:"
+    
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=markets_keyboard(markets, page=page)
+    )
+
+
 async def custom_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle custom amount input."""
     try:
@@ -357,7 +571,8 @@ async def custom_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             return CUSTOM_AMOUNT
         
         token_id = context.user_data.get('selected_token_id')
-        market = context.user_data.get('selected_market')
+        sub = context.user_data.get('selected_sub_market')
+        event = context.user_data.get('selected_event')
         outcome = context.user_data.get('selected_outcome', 'YES')
         price = context.user_data.get('selected_price', 0.5)
         
@@ -370,15 +585,18 @@ async def custom_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data['buy_amount'] = amount
         
         mode_text = "📝 PAPER" if Config.is_paper_mode() else "💱 LIVE"
+        event_title = event.title if event else (sub.question if sub else 'Unknown')
+        sub_title = sub.group_item_title or sub.question if sub else ''
         
         text = f"""
 🚀 <b>Confirm Buy Order</b>
 
-📋 <b>{market.question if market else 'Unknown'}</b>
+📋 <b>{event_title}</b>
+🎯 <b>{sub_title}</b>
 
-🎯 <b>Outcome:</b> {outcome}
-📍 <b>Price:</b> ${price:.4f}
-💵 <b>Amount:</b> ${amount:.2f}
+📍 <b>Outcome:</b> {outcome}
+💵 <b>Price:</b> ${price:.4f}
+💰 <b>Amount:</b> ${amount:.2f}
 📦 <b>Est. Shares:</b> {est_shares:.2f}
 
 <b>Mode:</b> {mode_text}

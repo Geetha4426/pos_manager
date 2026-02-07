@@ -1,17 +1,17 @@
 """
 Inline Keyboards
 
-All inline keyboard builders for the Telegram bot.
-Uses index-based callbacks to avoid Telegram's 64-byte callback_data limit.
+All keyboard layouts for the Telegram bot.
+Supports events with sub-markets for sports betting.
 """
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from typing import List, Optional
+from typing import List, Any
 
 
 def main_menu_keyboard() -> InlineKeyboardMarkup:
-    """Main menu keyboard."""
-    keyboard = [
+    """Main menu buttons."""
+    return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("📊 Positions", callback_data="positions"),
             InlineKeyboardButton("💰 Balance", callback_data="balance")
@@ -22,217 +22,209 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("⭐ Favorites", callback_data="favorites"),
-            InlineKeyboardButton("🔥 Hot Markets", callback_data="hot")
+            InlineKeyboardButton("🔥 Hot", callback_data="hot")
         ]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+    ])
 
 
-def positions_keyboard(positions: list) -> InlineKeyboardMarkup:
-    """Keyboard for positions list - uses index reference."""
-    keyboard = []
+def positions_keyboard(positions: List[Any]) -> InlineKeyboardMarkup:
+    """List of positions with index-based callbacks."""
+    buttons = []
     
-    for i, pos in enumerate(positions[:10]):  # Max 10 positions
+    for idx, pos in enumerate(positions[:10]):
         pnl_emoji = "📈" if pos.pnl >= 0 else "📉"
-        short_question = pos.market_question[:25] + "..." if len(pos.market_question) > 25 else pos.market_question
-        
-        keyboard.append([
-            InlineKeyboardButton(
-                f"{pnl_emoji} {short_question}",
-                callback_data=f"pos_{i}"  # Index-based
-            )
-        ])
+        label = f"{pnl_emoji} {pos.market_question[:30]}..."
+        buttons.append([InlineKeyboardButton(label, callback_data=f"pos_{idx}")])
     
-    keyboard.append([
-        InlineKeyboardButton("🔙 Menu", callback_data="menu"),
-        InlineKeyboardButton("🔄 Refresh", callback_data="positions")
-    ])
-    
-    return InlineKeyboardMarkup(keyboard)
+    buttons.append([InlineKeyboardButton("🔙 Menu", callback_data="menu")])
+    return InlineKeyboardMarkup(buttons)
 
 
-def position_detail_keyboard(pos_index: int, has_shares: bool = True) -> InlineKeyboardMarkup:
-    """Keyboard for position details with sell options - uses index."""
-    keyboard = []
-    
-    if has_shares:
-        keyboard.append([
-            InlineKeyboardButton("💯 Sell 100%", callback_data=f"sell_{pos_index}_100"),
-            InlineKeyboardButton("50%", callback_data=f"sell_{pos_index}_50")
-        ])
-        keyboard.append([
-            InlineKeyboardButton("25%", callback_data=f"sell_{pos_index}_25"),
+def position_detail_keyboard(pos_index: int) -> InlineKeyboardMarkup:
+    """Position detail with sell options."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📤 Sell 25%", callback_data=f"sell_{pos_index}_25"),
+            InlineKeyboardButton("📤 Sell 50%", callback_data=f"sell_{pos_index}_50")
+        ],
+        [
+            InlineKeyboardButton("📤 Sell 100%", callback_data=f"sell_{pos_index}_100"),
             InlineKeyboardButton("✏️ Custom", callback_data=f"sell_{pos_index}_c")
-        ])
-    
-    keyboard.append([
-        InlineKeyboardButton("🔙 Positions", callback_data="positions"),
-        InlineKeyboardButton("⭐ Favorite", callback_data=f"fav_a_{pos_index}")
+        ],
+        [InlineKeyboardButton("🔙 Positions", callback_data="positions")]
     ])
-    
-    return InlineKeyboardMarkup(keyboard)
 
 
 def sell_confirm_keyboard(pos_index: int, percent: int) -> InlineKeyboardMarkup:
-    """Confirm sell action keyboard."""
-    keyboard = [
-        [
-            InlineKeyboardButton("✅ Confirm Sell", callback_data=f"csell_{pos_index}_{percent}"),
-            InlineKeyboardButton("❌ Cancel", callback_data=f"pos_{pos_index}")
-        ]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+    """Sell confirmation."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Confirm Sell", callback_data=f"csell_{pos_index}_{percent}")],
+        [InlineKeyboardButton("❌ Cancel", callback_data=f"pos_{pos_index}")]
+    ])
 
 
 def category_keyboard() -> InlineKeyboardMarkup:
-    """Category selection for buying."""
-    keyboard = [
+    """Category selection."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🏆 Sports", callback_data="cat_sports")],
         [
-            InlineKeyboardButton("🏈 Sports", callback_data="cat_sports"),
-            InlineKeyboardButton("🗳️ Politics", callback_data="cat_politics")
+            InlineKeyboardButton("🏛️ Politics", callback_data="cat_politics"),
+            InlineKeyboardButton("₿ Crypto", callback_data="cat_crypto")
         ],
         [
-            InlineKeyboardButton("🪙 Crypto", callback_data="cat_crypto"),
-            InlineKeyboardButton("🎬 Entertainment", callback_data="cat_ent")
+            InlineKeyboardButton("🎬 Entertainment", callback_data="cat_ent"),
+            InlineKeyboardButton("📈 Finance", callback_data="cat_finance")
         ],
         [InlineKeyboardButton("🔙 Menu", callback_data="menu")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+    ])
 
 
 def sports_keyboard() -> InlineKeyboardMarkup:
-    """Sports selection keyboard."""
-    keyboard = [
+    """Sports selection."""
+    return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🏏 Cricket", callback_data="sp_cricket"),
             InlineKeyboardButton("⚽ Football", callback_data="sp_football")
         ],
         [
             InlineKeyboardButton("🏀 NBA", callback_data="sp_nba"),
-            InlineKeyboardButton("🎾 Tennis", callback_data="sp_tennis")
-        ],
-        [
-            InlineKeyboardButton("🥊 UFC/MMA", callback_data="sp_ufc"),
             InlineKeyboardButton("🏈 NFL", callback_data="sp_nfl")
         ],
+        [
+            InlineKeyboardButton("🎾 Tennis", callback_data="sp_tennis"),
+            InlineKeyboardButton("🥊 UFC", callback_data="sp_ufc")
+        ],
         [InlineKeyboardButton("🔙 Categories", callback_data="buy")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+    ])
 
 
-def markets_keyboard(markets: list, page: int = 0, page_size: int = 5) -> InlineKeyboardMarkup:
-    """Keyboard for market selection - uses index reference."""
-    keyboard = []
+def events_keyboard(events: List[Any], page: int = 0) -> InlineKeyboardMarkup:
+    """
+    Events list keyboard (matches/games).
+    Shows events with number of sub-markets available.
+    """
+    buttons = []
+    per_page = 5
+    start = page * per_page
+    end = start + per_page
+    page_events = events[start:end]
     
-    start = page * page_size
-    end = start + page_size
-    page_markets = markets[start:end]
-    
-    for i, market in enumerate(page_markets):
-        idx = start + i  # Global index in markets list
-        short_q = market.question[:30] + "..." if len(market.question) > 30 else market.question
-        keyboard.append([
-            InlineKeyboardButton(
-                f"📊 {short_q}",
-                callback_data=f"mkt_{idx}"  # Index-based, not condition_id
-            )
-        ])
+    for idx, event in enumerate(page_events):
+        real_idx = start + idx
+        sub_count = len(event.markets) if hasattr(event, 'markets') else 0
+        
+        # Truncate title and show sub-market count
+        title = event.title[:35] + "..." if len(event.title) > 35 else event.title
+        if sub_count > 1:
+            label = f"📋 {title} ({sub_count} bets)"
+        else:
+            label = f"📋 {title}"
+        
+        buttons.append([InlineKeyboardButton(label, callback_data=f"evt_{real_idx}")])
     
     # Pagination
-    nav_row = []
+    nav_buttons = []
     if page > 0:
-        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"pg_{page-1}"))
-    if end < len(markets):
-        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"pg_{page+1}"))
+        nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"evp_{page - 1}"))
+    if end < len(events):
+        nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"evp_{page + 1}"))
     
-    if nav_row:
-        keyboard.append(nav_row)
+    if nav_buttons:
+        buttons.append(nav_buttons)
     
-    keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="buy")])
+    buttons.append([InlineKeyboardButton("🔙 Sports", callback_data="cat_sports")])
+    return InlineKeyboardMarkup(buttons)
+
+
+def sub_markets_keyboard(sub_markets: List[Any], event_idx: int) -> InlineKeyboardMarkup:
+    """
+    Sub-markets within an event.
+    Shows options like: Match Winner, Toss Winner, Top Scorer, Over/Under
+    """
+    buttons = []
     
-    return InlineKeyboardMarkup(keyboard)
+    for idx, sub in enumerate(sub_markets[:8]):  # Max 8 sub-markets
+        # Get a short label
+        if sub.group_item_title:
+            label = sub.group_item_title[:35]
+        else:
+            label = sub.question[:35] if len(sub.question) > 35 else sub.question
+        
+        # Show price indicator
+        yes_pct = int(sub.yes_price * 100)
+        label = f"📊 {label} ({yes_pct}%)"
+        
+        buttons.append([InlineKeyboardButton(label, callback_data=f"sub_{event_idx}_{idx}")])
+    
+    buttons.append([InlineKeyboardButton("🔙 Events", callback_data="back_events")])
+    return InlineKeyboardMarkup(buttons)
 
 
 def outcome_keyboard() -> InlineKeyboardMarkup:
-    """Yes/No outcome selection - market already in context."""
-    keyboard = [
+    """Yes/No outcome selection."""
+    return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("✅ YES", callback_data="out_yes"),
             InlineKeyboardButton("❌ NO", callback_data="out_no")
         ],
-        [InlineKeyboardButton("🔙 Back", callback_data="buy")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+        [InlineKeyboardButton("⭐ Add Favorite", callback_data="fav_add")],
+        [InlineKeyboardButton("🔙 Back", callback_data="back_sub")]
+    ])
 
 
 def amount_keyboard() -> InlineKeyboardMarkup:
-    """Amount selection for buying - token already in context."""
-    keyboard = [
+    """Amount selection."""
+    return InlineKeyboardMarkup([
         [
+            InlineKeyboardButton("$5", callback_data="amt_5"),
             InlineKeyboardButton("$10", callback_data="amt_10"),
-            InlineKeyboardButton("$25", callback_data="amt_25"),
-            InlineKeyboardButton("$50", callback_data="amt_50")
+            InlineKeyboardButton("$25", callback_data="amt_25")
         ],
         [
+            InlineKeyboardButton("$50", callback_data="amt_50"),
             InlineKeyboardButton("$100", callback_data="amt_100"),
             InlineKeyboardButton("✏️ Custom", callback_data="amt_c")
         ],
-        [InlineKeyboardButton("🔙 Back", callback_data="buy")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+        [InlineKeyboardButton("🔙 Back", callback_data="back_out")]
+    ])
 
 
 def buy_confirm_keyboard() -> InlineKeyboardMarkup:
-    """Confirm buy action keyboard - all data in context."""
-    keyboard = [
-        [
-            InlineKeyboardButton("🚀 EXECUTE BUY", callback_data="exec_buy"),
-            InlineKeyboardButton("❌ Cancel", callback_data="buy")
-        ],
-        [
-            InlineKeyboardButton("⭐ Add Favorite", callback_data="fav_add")
-        ]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+    """Buy confirmation."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⚡ Execute Buy", callback_data="exec_buy")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="buy")]
+    ])
 
 
-def favorites_keyboard(favorites: list) -> InlineKeyboardMarkup:
-    """Favorites list keyboard - uses index."""
-    keyboard = []
+def favorites_keyboard(favorites: List[Any]) -> InlineKeyboardMarkup:
+    """Favorites list."""
+    buttons = []
     
-    for i, fav in enumerate(favorites[:10]):
-        short_label = fav.label[:22] + "..." if len(fav.label) > 22 else fav.label
-        keyboard.append([
-            InlineKeyboardButton(
-                f"⭐ {short_label} ({fav.outcome})",
-                callback_data=f"fv_{i}"  # Index-based
-            ),
-            InlineKeyboardButton("🗑️", callback_data=f"fd_{i}")
+    for idx, fav in enumerate(favorites[:8]):
+        label = f"⭐ {fav.label[:35]}..."
+        buttons.append([
+            InlineKeyboardButton(label, callback_data=f"fv_{idx}"),
+            InlineKeyboardButton("🗑️", callback_data=f"fd_{idx}")
         ])
     
-    keyboard.append([
-        InlineKeyboardButton("🔙 Menu", callback_data="menu")
-    ])
-    
-    return InlineKeyboardMarkup(keyboard)
+    buttons.append([InlineKeyboardButton("🔙 Menu", callback_data="menu")])
+    return InlineKeyboardMarkup(buttons)
 
 
-def search_results_keyboard(markets: list) -> InlineKeyboardMarkup:
-    """Search results keyboard - uses index."""
-    keyboard = []
+def search_results_keyboard(markets: List[Any]) -> InlineKeyboardMarkup:
+    """Search results - single markets (not events)."""
+    buttons = []
     
-    for i, market in enumerate(markets[:8]):
-        short_q = market.question[:28] + "..." if len(market.question) > 28 else market.question
-        keyboard.append([
-            InlineKeyboardButton(
-                f"📊 {short_q}",
-                callback_data=f"mkt_{i}"  # Index-based
-            )
-        ])
+    for idx, market in enumerate(markets[:8]):
+        title = market.question[:40] + "..." if len(market.question) > 40 else market.question
+        buttons.append([InlineKeyboardButton(f"📊 {title}", callback_data=f"mkt_{idx}")])
     
-    keyboard.append([
-        InlineKeyboardButton("🔙 Menu", callback_data="menu"),
-        InlineKeyboardButton("🔍 New Search", callback_data="search")
-    ])
-    
-    return InlineKeyboardMarkup(keyboard)
+    buttons.append([InlineKeyboardButton("🔙 Menu", callback_data="menu")])
+    return InlineKeyboardMarkup(buttons)
+
+
+# Keep legacy markets_keyboard for backward compatibility
+def markets_keyboard(markets: List[Any], page: int = 0) -> InlineKeyboardMarkup:
+    """Legacy markets keyboard for non-event markets."""
+    return search_results_keyboard(markets)

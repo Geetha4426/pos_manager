@@ -2,6 +2,7 @@
 Polymarket Telegram Sniper Bot
 
 Main entry point - registers all handlers and starts the bot.
+Supports event-based sports navigation with sub-markets.
 """
 
 import asyncio
@@ -31,8 +32,10 @@ from bot.handlers.positions import (
     confirm_sell_callback, custom_sell_input, CUSTOM_SELL_PERCENT
 )
 from bot.handlers.trading import (
-    buy_command, category_callback, sport_callback, page_callback,
-    market_callback, outcome_callback, amount_callback,
+    buy_command, category_callback, sport_callback, 
+    event_callback, events_page_callback, sub_market_callback,
+    back_events_callback, back_sub_callback, back_out_callback,
+    outcome_callback, amount_callback, market_callback, page_callback,
     execute_buy_callback, custom_amount_input, CUSTOM_AMOUNT
 )
 from bot.handlers.search import (
@@ -109,9 +112,9 @@ async def help_command(update: Update, context):
 /help - This help
 
 <b>Tips:</b>
-• Use button menus for fastest trading
+• Select Sport → Event → Sub-Market → Yes/No
+• Sub-markets show toss winner, top scorer, etc.
 • Partial sells: 25%, 50%, or custom %
-• Add favorites for quick access
 """
     
     await update.message.reply_text(text, parse_mode='HTML')
@@ -122,7 +125,7 @@ async def menu_callback(update: Update, context):
     query = update.callback_query
     await query.answer()
     
-    mode = "📝 Paper Trading" if Config.is_paper_mode() else "💱 Live Trading"
+    mode = "📝 Paper Trading" if Config.is_paper_mode() else "💱 LIVE Trading"
     
     text = f"""
 🚀 <b>Polymarket Sniper Bot</b>
@@ -175,7 +178,7 @@ def main():
     app.add_handler(CommandHandler("hot", hot_command))
     
     # ═══════════════════════════════════════════════════════════════════
-    # CALLBACK HANDLERS (using short patterns to avoid 64-byte limit)
+    # CALLBACK HANDLERS
     # ═══════════════════════════════════════════════════════════════════
     
     # Menu navigation
@@ -187,21 +190,35 @@ def main():
     app.add_handler(CallbackQueryHandler(favorites_callback, pattern="^favorites$"))
     app.add_handler(CallbackQueryHandler(hot_callback, pattern="^hot$"))
     
-    # Position handlers (index-based)
+    # Position handlers
     app.add_handler(CallbackQueryHandler(position_detail_callback, pattern=r"^pos_\d+$"))
     app.add_handler(CallbackQueryHandler(sell_callback, pattern=r"^sell_\d+_"))
     app.add_handler(CallbackQueryHandler(confirm_sell_callback, pattern=r"^csell_\d+_\d+$"))
     
-    # Trading handlers (index-based)
+    # Trading handlers - EVENT BASED FLOW
     app.add_handler(CallbackQueryHandler(category_callback, pattern="^cat_"))
     app.add_handler(CallbackQueryHandler(sport_callback, pattern="^sp_"))
-    app.add_handler(CallbackQueryHandler(page_callback, pattern=r"^pg_\d+$"))
-    app.add_handler(CallbackQueryHandler(market_callback, pattern=r"^mkt_\d+$"))
+    
+    # Event navigation (Sport → Events → Sub-Markets)
+    app.add_handler(CallbackQueryHandler(event_callback, pattern=r"^evt_\d+$"))
+    app.add_handler(CallbackQueryHandler(events_page_callback, pattern=r"^evp_\d+$"))
+    app.add_handler(CallbackQueryHandler(sub_market_callback, pattern=r"^sub_\d+_\d+$"))
+    
+    # Back navigation
+    app.add_handler(CallbackQueryHandler(back_events_callback, pattern="^back_events$"))
+    app.add_handler(CallbackQueryHandler(back_sub_callback, pattern="^back_sub$"))
+    app.add_handler(CallbackQueryHandler(back_out_callback, pattern="^back_out$"))
+    
+    # Trading flow
     app.add_handler(CallbackQueryHandler(outcome_callback, pattern="^out_"))
     app.add_handler(CallbackQueryHandler(amount_callback, pattern="^amt_"))
     app.add_handler(CallbackQueryHandler(execute_buy_callback, pattern="^exec_buy$"))
     
-    # Favorites handlers (index-based)
+    # Legacy market handlers (for search results)
+    app.add_handler(CallbackQueryHandler(market_callback, pattern=r"^mkt_\d+$"))
+    app.add_handler(CallbackQueryHandler(page_callback, pattern=r"^pg_\d+$"))
+    
+    # Favorites handlers
     app.add_handler(CallbackQueryHandler(fav_add_callback, pattern="^fav_add$"))
     app.add_handler(CallbackQueryHandler(fav_view_callback, pattern=r"^fv_\d+$"))
     app.add_handler(CallbackQueryHandler(fav_del_callback, pattern=r"^fd_\d+$"))
@@ -213,6 +230,7 @@ def main():
     # START BOT
     # ═══════════════════════════════════════════════════════════════════
     print("🚀 Starting Polymarket Telegram Bot...")
+    print("📊 Sports flow: Sport → Events → Sub-Markets → Yes/No")
     print("Press Ctrl+C to stop.\n")
     
     app.run_polling(allowed_updates=Update.ALL_TYPES)
