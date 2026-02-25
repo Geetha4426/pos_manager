@@ -389,10 +389,19 @@ async def confirm_sell_callback(update: Update, context: ContextTypes.DEFAULT_TY
             f"<i>{'📝 Paper trade' if Config.is_paper_mode() else '💱 Live trade'}</i>"
         )
     else:
+        err = result.error or 'Unknown error'
+        err_lower = err.lower()
+        if 'geo' in err_lower or 'region' in err_lower or '451' in err:
+            hint = "\n\n\ud83c\udf0d Server may be in a restricted region."
+        elif 'expired' in err_lower or 'auth' in err_lower or '403' in err:
+            hint = "\n\n\ud83d\udd04 Session may have expired. Try again."
+        elif 'insufficient' in err_lower or 'size' in err_lower:
+            hint = "\n\nReduce sell size or check position."
+        else:
+            hint = "\n\nPlease try again or check your position."
         text = (
-            f"❌ <b>Sell Failed</b>\n\n"
-            f"Error: {result.error}\n\n"
-            f"Please try again or check your position."
+            f"\u274c <b>Sell Failed</b>\n\n"
+            f"Error: {err}{hint}"
         )
     
     keyboard = InlineKeyboardMarkup([

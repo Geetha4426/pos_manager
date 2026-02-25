@@ -353,12 +353,16 @@ GEO_BLOCK_MSG = (
 
 
 def is_geo_block_error(error_msg: str) -> bool:
-    """Detect if an error is caused by Polymarket geo-blocking."""
+    """Detect if an error is specifically caused by Polymarket geo-blocking.
+    
+    IMPORTANT: Only match explicit geo-block keywords.
+    Do NOT match generic 'forbidden'/'403' - those are often auth/session errors.
+    """
     lower = error_msg.lower()
     return any(kw in lower for kw in (
-        'geo', 'blocked', 'restricted', 'not available in your region',
-        'forbidden', '451', 'unavailable for legal',
-        'access denied', 'geofence'
+        'geograph', 'geofence', 'geo restrict', 'geo block', 'geo-block',
+        'not available in your region', 'region restriction',
+        'unavailable for legal', 'country restriction',
     ))
 
 
@@ -378,7 +382,7 @@ class PolymarketClient:
         self._paper_balance = 1000.0
         self._paper_positions: Dict[str, Dict] = {}
         self._funder_address = ''
-        self._geo_blocked = False  # Set if geo-block detected
+        self._geo_block_count = 0  # Track consecutive geo-blocks (not sticky)
         
         if not self.is_paper and CLOB_AVAILABLE and Config.POLYGON_PRIVATE_KEY:
             self._init_live_client()
@@ -416,13 +420,9 @@ class PolymarketClient:
             print(f"   ↳ Funder (proxy wallet): {actual_funder}")
             print(f"✅ Live Polymarket client initialized ({_time.time()-t0:.1f}s total)")
         except Exception as e:
-            err_str = str(e)
-            if is_geo_block_error(err_str):
-                self._geo_blocked = True
-                print(f"🚫 GEO-BLOCKED: {e}")
+            print(f"⚠️ Failed to init live client: {e}")
+            if is_geo_block_error(str(e)):
                 print(GEO_BLOCK_MSG)
-            else:
-                print(f"⚠️ Failed to init live client: {e}")
             self.clob_client = None
     
     async def _fetch_with_retry(
@@ -455,7 +455,7 @@ class PolymarketClient:
                     if resp.status_code == 200:
                         return resp.json()
                     
-                    # Geo-block detection (403/451)
+                    # 403/451 handling (Gamma API is read-only, rarely geo-blocked)
                     if resp.status_code in (403, 451):
                         body = ''
                         try:
@@ -463,10 +463,9 @@ class PolymarketClient:
                         except:
                             pass
                         if resp.status_code == 451 or is_geo_block_error(body):
-                            print(f"🚫 GEO-BLOCKED ({resp.status_code}): {body}")
-                            self._geo_blocked = True
-                            return None
-                        print(f"⚠️ Forbidden {resp.status_code} for {url}")
+                            print(f"🚫 Geo-blocked ({resp.status_code}): {body}")
+                        else:
+                            print(f"⚠️ Forbidden {resp.status_code} for {url}: {body}")
                         return None
                     
                     # Permanent errors - don't retry
@@ -653,23 +652,44 @@ class PolymarketClient:
             print(f"⚠️ Session refresh failed: {e}")
     
     def _clob_call(self, method, *args, **kwargs):
-        """Call a CLOB client method with auto-retry on auth/session errors."""
-        if self._geo_blocked:
-            raise Exception(GEO_BLOCK_MSG)
+        """Call a CLOB client method with smart retry and NO sticky lockout.
+        
+        Strategy:
+        - On success: reset error counter
+        - On auth/403 errors: refresh session and retry once
+        - On explicit geo-block (451 or geo keywords): raise with message
+        - On other errors: propagate as-is (never lock out the entire bot)
+        """
         try:
-            return method(*args, **kwargs)
+            result = method(*args, **kwargs)
+            self._consecutive_errors = 0  # Success resets counter
+            return result
         except Exception as e:
+            self._consecutive_errors += 1
             err_msg = str(e)
-            # Check for geo-block first
-            if is_geo_block_error(err_msg):
-                self._geo_blocked = True
+            err_lower = err_msg.lower()
+            
+            # HTTP 451 is always geo-block
+            if '451' in err_msg or is_geo_block_error(err_msg):
                 print(f"🚫 GEO-BLOCKED: {e}")
                 raise Exception(GEO_BLOCK_MSG)
-            # Auth/session errors → refresh and retry
-            if any(kw in err_msg.lower() for kw in ('expired', 'unauthorized', 'auth', '401')):
-                print(f"🔄 Session error, re-authenticating: {e}")
+            
+            # Auth/session/forbidden errors -> refresh creds and retry once
+            if any(kw in err_lower for kw in ('expired', 'unauthorized', 'auth', '401', 'forbidden', '403')):
+                print(f"🔄 Auth error ({self._consecutive_errors}x), refreshing: {e}")
                 self._refresh_session()
-                return method(*args, **kwargs)
+                try:
+                    result = method(*args, **kwargs)
+                    self._consecutive_errors = 0
+                    return result
+                except Exception as retry_e:
+                    # If retry also gets 451/geo -> that IS geo-block
+                    retry_msg = str(retry_e)
+                    if '451' in retry_msg or is_geo_block_error(retry_msg):
+                        raise Exception(GEO_BLOCK_MSG)
+                    print(f"⚠️ Retry also failed: {retry_e}")
+                    raise retry_e
+            
             raise
     
     async def get_balance(self) -> float:
@@ -705,32 +725,114 @@ class PolymarketClient:
         return 0.0
     
     async def get_positions(self) -> List[Position]:
-        """Get all open positions by reconstructing from trade history."""
+        """Get ACTIVE open positions (filters out resolved/closed markets).
+        
+        Strategy:
+        1. Fetch all trades from CLOB (auto-paginated, L2 auth)
+        2. Reconstruct net positions per token_id (buy - sell)
+        3. For each position with size > 0, check if market is still active
+           via CLOB get_market (condition_id) - filters resolved markets
+        4. Fetch live prices for active positions
+        """
         if self.is_paper or not self.clob_client:
             return self._get_paper_positions()
         
-        # get_trades() with L2 auth returns ALL trades for the authenticated user
-        # (both maker AND taker). Don't filter by maker_address — market orders
-        # are taker orders and would be excluded.
-        # The method auto-paginates and returns a flat list.
-        # Run in thread to avoid blocking the async event loop.
         try:
             all_trades = await asyncio.to_thread(
                 self._clob_call, self.clob_client.get_trades
             )
             print(f"📊 Fetched {len(all_trades)} trades from CLOB")
-            if all_trades:
-                # Log first trade for field name debugging
-                if isinstance(all_trades[0], dict):
-                    sample_keys = list(all_trades[0].keys())
-                    print(f"   ↳ Trade fields: {sample_keys}")
-                positions = self._positions_from_trades(all_trades)
-                print(f"📦 Reconstructed {len(positions)} open positions")
-                return positions
+            if not all_trades:
+                return []
+            
+            # Log first trade for debugging
+            if isinstance(all_trades[0], dict):
+                sample_keys = list(all_trades[0].keys())
+                print(f"   ↳ Trade fields: {sample_keys}")
+            
+            raw_positions = self._positions_from_trades(all_trades)
+            if not raw_positions:
+                return []
+            
+            print(f"📦 Raw positions from trades: {len(raw_positions)}")
+            
+            # Filter out resolved/closed markets
+            active_positions = await self._filter_active_positions(raw_positions)
+            print(f"✅ Active positions (after filtering resolved): {len(active_positions)}")
+            return active_positions
+            
         except Exception as e:
             print(f"⚠️ CLOB trades error: {e}")
         
         return []
+    
+    async def _filter_active_positions(self, positions: List[Position]) -> List[Position]:
+        """Filter positions to only include those with active (non-resolved) markets.
+        
+        Uses CLOB get_market(condition_id) which returns market status.
+        Markets with accepting_orders=True are still active.
+        Also fetches live price for each active position.
+        """
+        active = []
+        
+        # Collect unique condition_ids to check
+        seen_conditions: Dict[str, bool] = {}  # condition_id -> is_active
+        
+        for pos in positions:
+            cid = pos.condition_id
+            
+            # Check market status (cache within this call)
+            if cid and cid not in seen_conditions:
+                try:
+                    market_data = await asyncio.to_thread(
+                        self.clob_client.get_market, cid
+                    )
+                    if isinstance(market_data, dict):
+                        # Market is active if it's still accepting orders and not resolved
+                        accepting = market_data.get('accepting_orders', False)
+                        closed = market_data.get('closed', False)
+                        resolved = market_data.get('resolved', market_data.get('is_resolved', False))
+                        end_date_str = market_data.get('end_date_iso', '')
+                        active_flag = market_data.get('active', True)
+                        
+                        is_active = accepting and not closed and not resolved and active_flag
+                        seen_conditions[cid] = is_active
+                        
+                        if not is_active:
+                            reason = []
+                            if closed:
+                                reason.append('closed')
+                            if resolved:
+                                reason.append('resolved')
+                            if not accepting:
+                                reason.append('not accepting orders')
+                            if not active_flag:
+                                reason.append('inactive')
+                            print(f"   ⏭️ Skipping resolved: {pos.market_question[:50]} ({', '.join(reason)})")
+                    else:
+                        seen_conditions[cid] = True  # Assume active if can't parse
+                except Exception as e:
+                    print(f"   ⚠️ Market check error for {cid[:12]}...: {e}")
+                    seen_conditions[cid] = True  # Assume active on error (don't hide positions)
+            
+            # Skip if market is resolved
+            if cid and not seen_conditions.get(cid, True):
+                continue
+            
+            # Fetch live price for active position
+            try:
+                live_price = await self.get_price(pos.token_id, refresh_from_clob=True)
+                if live_price > 0:
+                    pos.current_price = live_price
+                    pos.value = live_price * pos.size
+                    pos.pnl = (live_price - pos.avg_price) * pos.size
+                    pos.pnl_percent = ((live_price / pos.avg_price) - 1) * 100 if pos.avg_price > 0 else 0
+            except Exception:
+                pass  # Keep avg_price as current_price
+            
+            active.append(pos)
+        
+        return active
     
     def _parse_gamma_positions(self, data: List[Dict]) -> List[Position]:
         """Parse positions from Gamma API /positions endpoint."""
@@ -2189,19 +2291,20 @@ class PolymarketClient:
         """
         if self.is_paper:
             await self._load_paper_positions()
-        elif self.clob_client and not self._geo_blocked:
-            # Quick geo-block check: hit CLOB /time (no auth needed, fast)
+        elif self.clob_client:
+            # Quick connectivity check: hit CLOB /time (no auth needed, fast)
             try:
                 async with httpx.AsyncClient(timeout=10) as client:
                     resp = await client.get(f"{Config.POLYMARKET_CLOB_URL}/time")
-                    if resp.status_code in (403, 451):
-                        self._geo_blocked = True
-                        print(f"🚫 GEO-BLOCKED: /time returned {resp.status_code}")
+                    if resp.status_code == 451:
+                        print(f"🚫 Warning: CLOB /time returned 451 (geo-blocked)")
                         print(GEO_BLOCK_MSG)
+                    elif resp.status_code == 403:
+                        print(f"⚠️ CLOB /time returned 403 (may be auth issue, not blocking)")
                     else:
-                        print(f"🌍 Geo-check OK (CLOB /time = {resp.status_code})")
+                        print(f"🌍 CLOB connectivity OK (/time = {resp.status_code})")
             except Exception as e:
-                print(f"⚠️ Geo-check failed: {e}")
+                print(f"⚠️ CLOB connectivity check failed: {e}")
 
 
 # Singleton instance

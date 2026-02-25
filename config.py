@@ -39,7 +39,7 @@ class Config:
     TRADING_MODE = os.getenv('TRADING_MODE', 'paper')  # 'paper' or 'live'
     DEFAULT_SLIPPAGE = float(os.getenv('DEFAULT_SLIPPAGE', '2.0'))
     MAX_TRADE_USD = float(os.getenv('MAX_TRADE_USD', '100'))
-    MIN_TRADE_USD = float(os.getenv('MIN_TRADE_USD', '5'))
+    MIN_TRADE_USD = float(os.getenv('MIN_TRADE_USD', '1'))
     
     # ═══════════════════════════════════════════════════════════════════
     # INSTANT SELL & FOK SETTINGS

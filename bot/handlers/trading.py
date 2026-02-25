@@ -422,6 +422,10 @@ async def outcome_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         token_id = sub.no_token_id
         price = sub.no_price
     
+    if not token_id:
+        await query.edit_message_text("⚠️ Token data unavailable for this market. Try another market.")
+        return
+    
     context.user_data['selected_token_id'] = token_id
     context.user_data['selected_outcome'] = outcome
     context.user_data['selected_price'] = price
@@ -492,7 +496,7 @@ async def amount_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if amount_str == 'custom':  # custom
         await query.edit_message_text(
-            "✏️ <b>Custom Amount</b>\n\nEnter amount in USD (min $5, max $100):",
+            f"✏️ <b>Custom Amount</b>\n\nEnter amount in USD (min ${Config.MIN_TRADE_USD:.0f}, max ${Config.MAX_TRADE_USD:.0f}):",
             parse_mode='HTML'
         )
         return CUSTOM_AMOUNT
@@ -714,8 +718,18 @@ async def custom_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         price = context.user_data.get('selected_price', 0.5)
         
         if not token_id:
-            await update.message.reply_text("⚠️ Session expired. Use /buy to start over.")
-            return ConversationHandler.END
+            # Try to recover from sub-market data
+            if sub:
+                if outcome == 'YES':
+                    token_id = getattr(sub, 'yes_token_id', None)
+                else:
+                    token_id = getattr(sub, 'no_token_id', None)
+                if token_id:
+                    context.user_data['selected_token_id'] = token_id
+            
+            if not token_id:
+                await update.message.reply_text("⚠️ Market data not found. Use /buy to start over.")
+                return ConversationHandler.END
         
         est_shares = amount / price if price > 0 else 0
         

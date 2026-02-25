@@ -294,11 +294,13 @@ def amount_keyboard() -> InlineKeyboardMarkup:
     """Amount selection."""
     return InlineKeyboardMarkup([
         [
+            InlineKeyboardButton("$1", callback_data="amt_1"),
+            InlineKeyboardButton("$2", callback_data="amt_2"),
             InlineKeyboardButton("$5", callback_data="amt_5"),
-            InlineKeyboardButton("$10", callback_data="amt_10"),
-            InlineKeyboardButton("$25", callback_data="amt_25")
+            InlineKeyboardButton("$10", callback_data="amt_10")
         ],
         [
+            InlineKeyboardButton("$25", callback_data="amt_25"),
             InlineKeyboardButton("$50", callback_data="amt_50"),
             InlineKeyboardButton("$100", callback_data="amt_100"),
             InlineKeyboardButton("✏️ Custom", callback_data="amt_custom")
