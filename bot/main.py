@@ -167,6 +167,8 @@ async def error_handler(update: object, context) -> None:
 
 def main():
     """Start the bot."""
+    print("🟢 Bot process starting...", flush=True)
+    
     if not Config.TELEGRAM_BOT_TOKEN:
         print("❌ TELEGRAM_BOT_TOKEN not set!")
         print("Set it in .env file or environment variables.")
@@ -177,16 +179,32 @@ def main():
     
     Config.print_status()
     
-    # Persistence: user_data survives bot restarts (fixes "session expired" on buy)
+    # Persistence: user_data survives bot restarts
     import os
-    data_dir = os.path.dirname(Config.DATABASE_PATH)
-    if data_dir:
-        os.makedirs(data_dir, exist_ok=True)
-    persistence_path = os.path.join(data_dir or '.', 'bot_data.pickle')
-    persistence = PicklePersistence(filepath=persistence_path)
+    persistence = None
+    try:
+        data_dir = os.path.dirname(Config.DATABASE_PATH)
+        if data_dir:
+            os.makedirs(data_dir, exist_ok=True)
+        persistence_path = os.path.join(data_dir or '.', 'bot_data.pickle')
+        # Remove corrupt pickle if it exists and is tiny/empty
+        if os.path.exists(persistence_path):
+            fsize = os.path.getsize(persistence_path)
+            if fsize < 10:
+                os.remove(persistence_path)
+                print(f"🗑️ Removed corrupt pickle ({fsize}B)")
+        persistence = PicklePersistence(filepath=persistence_path)
+        print(f"💾 Persistence: {persistence_path}")
+    except Exception as e:
+        print(f"⚠️ Persistence init failed (non-fatal): {e}")
+        persistence = None
     
-    # Build application with persistence
-    app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).persistence(persistence).build()
+    # Build application
+    builder = Application.builder().token(Config.TELEGRAM_BOT_TOKEN)
+    if persistence:
+        builder = builder.persistence(persistence)
+    app = builder.build()
+    print("✅ Application built", flush=True)
     
     # Initialize async components on startup
     async def post_init(application):
@@ -390,4 +408,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        print(f"💥 FATAL: {e}", flush=True)
+        traceback.print_exc()
+        raise

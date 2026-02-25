@@ -383,6 +383,7 @@ class PolymarketClient:
         self._paper_positions: Dict[str, Dict] = {}
         self._funder_address = ''
         self._geo_block_count = 0  # Track consecutive geo-blocks (not sticky)
+        self._consecutive_errors = 0  # Track consecutive CLOB errors
         
         if not self.is_paper and CLOB_AVAILABLE and Config.POLYGON_PRIVATE_KEY:
             self._init_live_client()
