@@ -351,6 +351,7 @@ class PolymarketClient:
         self.clob_client = None
         self._paper_balance = 1000.0
         self._paper_positions: Dict[str, Dict] = {}
+        self._funder_address = ''
         
         if not self.is_paper and CLOB_AVAILABLE and Config.POLYGON_PRIVATE_KEY:
             self._init_live_client()
@@ -362,12 +363,19 @@ class PolymarketClient:
         import time as _time
         try:
             t0 = _time.time()
+            
+            # Funder = Polymarket proxy wallet address (holds your USDC/positions)
+            # If not set, ClobClient defaults to signer (EOA) address
+            funder = Config.FUNDER_ADDRESS
+            if not funder or funder == 'your_funder_address_here':
+                funder = None  # Let ClobClient default to signer address
+            
             self.clob_client = ClobClient(
                 Config.POLYMARKET_CLOB_URL,
                 key=Config.POLYGON_PRIVATE_KEY,
                 chain_id=Config.POLYGON_CHAIN_ID,
                 signature_type=Config.SIGNATURE_TYPE,
-                funder=Config.FUNDER_ADDRESS if Config.FUNDER_ADDRESS else None
+                funder=funder
             )
             print(f"   ↳ ClobClient created ({_time.time()-t0:.1f}s)")
             
@@ -375,6 +383,10 @@ class PolymarketClient:
             self.clob_client.set_api_creds(self.clob_client.create_or_derive_api_creds())
             print(f"   ↳ API creds derived ({_time.time()-t1:.1f}s)")
             
+            # Log the funder address being used (for positions/balance queries)
+            actual_funder = funder or self.clob_client.get_address()
+            self._funder_address = actual_funder
+            print(f"   ↳ Funder (proxy wallet): {actual_funder}")
             print(f"✅ Live Polymarket client initialized ({_time.time()-t0:.1f}s total)")
         except Exception as e:
             print(f"⚠️ Failed to init live client: {e}")
@@ -599,7 +611,7 @@ class PolymarketClient:
         
         # Fallback: try CLOB REST API
         try:
-            funder = Config.FUNDER_ADDRESS
+            funder = self._funder_address
             if funder:
                 async with httpx.AsyncClient(timeout=15) as client:
                     resp = await client.get(
@@ -621,8 +633,8 @@ class PolymarketClient:
         
         # Method 1: Gamma API /positions (primary source for live positions)
         try:
-            funder = Config.FUNDER_ADDRESS
-            if funder and funder != 'your_funder_address_here':
+            funder = self._funder_address
+            if funder:
                 data = await self._fetch_with_retry(
                     f"{Config.POLYMARKET_GAMMA_URL}/positions",
                     params={"user": funder, "redeemable": "false", "limit": "100"}
