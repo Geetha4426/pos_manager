@@ -631,25 +631,42 @@ class PolymarketClient:
         if self.is_paper or not self.clob_client:
             return self._get_paper_positions()
         
-        # Method 1: Gamma API /positions (primary source for live positions)
-        try:
-            funder = self._funder_address
-            if funder:
-                data = await self._fetch_with_retry(
-                    f"{Config.POLYMARKET_GAMMA_URL}/positions",
-                    params={"user": funder, "redeemable": "false", "limit": "100"}
-                )
-                if data and isinstance(data, list) and len(data) > 0:
-                    return self._parse_gamma_positions(data)
-        except Exception as e:
-            print(f"⚠️ Gamma positions error: {e}")
+        funder = self._funder_address
         
-        # Method 2: Accumulate from filled trades via CLOB
+        # Method 1: CLOB data API /data/positions (most reliable for CLOB users)
+        try:
+            if funder:
+                async with httpx.AsyncClient(timeout=15) as client:
+                    resp = await client.get(
+                        f"{Config.POLYMARKET_CLOB_URL}/data/positions",
+                        params={"address": funder}
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if data and isinstance(data, list) and len(data) > 0:
+                            return self._parse_gamma_positions(data)
+        except Exception as e:
+            print(f"⚠️ CLOB positions error: {e}")
+        
+        # Method 2: Gamma API — try multiple endpoints
+        for endpoint in ["/user-market-positions", "/positions"]:
+            try:
+                if funder:
+                    data = await self._fetch_with_retry(
+                        f"{Config.POLYMARKET_GAMMA_URL}{endpoint}",
+                        params={"user": funder, "redeemable": "false", "limit": "100"}
+                    )
+                    if data and isinstance(data, list) and len(data) > 0:
+                        return self._parse_gamma_positions(data)
+            except Exception:
+                pass
+        
+        # Method 3: Accumulate from filled trades via CLOB
         try:
             if self.clob_client:
                 from py_clob_client.clob_types import TradeParams
                 trades_resp = self.clob_client.get_trades(
-                    TradeParams(maker_address=Config.FUNDER_ADDRESS)
+                    TradeParams(maker_address=funder)
                 )
                 if trades_resp and isinstance(trades_resp, dict):
                     trades = trades_resp.get('data', trades_resp.get('trades', []))

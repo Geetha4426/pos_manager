@@ -11,6 +11,7 @@ Features:
 
 import asyncio
 import logging
+import warnings
 from telegram import Update
 from telegram.ext import (
     Application, 
@@ -169,6 +170,9 @@ def main():
         print("❌ TELEGRAM_BOT_TOKEN not set!")
         print("Set it in .env file or environment variables.")
         return
+    
+    # Suppress PTB per_message warnings for ConversationHandlers with CallbackQuery entry points
+    warnings.filterwarnings('ignore', message=".*per_message.*", category=UserWarning)
     
     Config.print_status()
     
@@ -373,7 +377,7 @@ def main():
     print("📊 Sports flow: Sport → Events → Sub-Markets → Yes/No")
     print("Press Ctrl+C to stop.\n")
     
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
 if __name__ == "__main__":
