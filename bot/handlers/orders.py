@@ -21,12 +21,15 @@ async def orders_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     orders = await client.get_open_orders()
     
     if not orders:
-        await update.message.reply_text(
+        text = (
             "📭 <b>No Open Orders</b>\n\n"
             "You don't have any pending limit orders.\n"
-            "Use /buy to place a new order.",
-            parse_mode='HTML'
+            "Use /buy to place a new order."
         )
+        if update.callback_query:
+            await update.callback_query.edit_message_text(text, parse_mode='HTML')
+        else:
+            await update.message.reply_text(text, parse_mode='HTML')
         return
     
     text = "📝 <b>Open Orders</b>\n\n"
@@ -58,11 +61,18 @@ async def orders_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         InlineKeyboardButton("🔙 Menu", callback_data="menu")
     ])
     
-    await update.message.reply_text(
-        text,
-        parse_mode='HTML',
-        reply_markup=InlineKeyboardMarkup(buttons)
-    )
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            text,
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+    else:
+        await update.message.reply_text(
+            text,
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
 
 
 async def orders_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

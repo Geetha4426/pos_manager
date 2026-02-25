@@ -3,10 +3,12 @@ Inline Keyboards
 
 All keyboard layouts for the Telegram bot.
 Supports events with sub-markets for sports betting.
+Shows event timing status (🔴 LIVE / 🟢 Upcoming) and date info.
 """
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from typing import List, Any
+from datetime import datetime
 
 
 def main_menu_keyboard() -> InlineKeyboardMarkup:
@@ -28,15 +30,22 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
 
 
 def positions_keyboard(positions: List[Any]) -> InlineKeyboardMarkup:
-    """List of positions with index-based callbacks."""
+    """List of positions with instant sell buttons."""
     buttons = []
     
     for idx, pos in enumerate(positions[:10]):
-        pnl_emoji = "📈" if pos.pnl >= 0 else "📉"
-        label = f"{pnl_emoji} {pos.market_question[:30]}..."
-        buttons.append([InlineKeyboardButton(label, callback_data=f"pos_{idx}")])
+        pnl_emoji = "🟢" if pos.pnl >= 0 else "🔴"
+        pnl_str = f"+${pos.pnl:.1f}" if pos.pnl >= 0 else f"-${abs(pos.pnl):.1f}"
+        label = f"{pnl_emoji} {pos.market_question[:25]}.. {pnl_str}"
+        buttons.append([
+            InlineKeyboardButton(label, callback_data=f"pos_{idx}"),
+            InlineKeyboardButton("⚡SELL", callback_data=f"isell_{idx}_100")
+        ])
     
-    buttons.append([InlineKeyboardButton("🔙 Menu", callback_data="menu")])
+    buttons.append([
+        InlineKeyboardButton("🔄 Refresh", callback_data="refresh_positions"),
+        InlineKeyboardButton("🔙 Menu", callback_data="menu")
+    ])
     return InlineKeyboardMarkup(buttons)
 
 
@@ -60,6 +69,29 @@ def sell_confirm_keyboard(pos_index: int, percent: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Confirm Sell", callback_data=f"csell_{pos_index}_{percent}")],
         [InlineKeyboardButton("❌ Cancel", callback_data=f"pos_{pos_index}")]
+    ])
+
+
+def instant_sell_keyboard(pos_index: int) -> InlineKeyboardMarkup:
+    """
+    Position detail with instant sell buttons.
+    One-click sell at 25%, 50%, or 100% — NO confirmation step.
+    """
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("⚡ SELL 100%", callback_data=f"isell_{pos_index}_100"),
+        ],
+        [
+            InlineKeyboardButton("⚡ 50%", callback_data=f"isell_{pos_index}_50"),
+            InlineKeyboardButton("⚡ 25%", callback_data=f"isell_{pos_index}_25"),
+        ],
+        [
+            InlineKeyboardButton("📤 Custom %", callback_data=f"sell_{pos_index}_c"),
+        ],
+        [
+            InlineKeyboardButton("🔄 Refresh", callback_data=f"pos_{pos_index}"),
+            InlineKeyboardButton("🔙 Positions", callback_data="positions"),
+        ]
     ])
 
 
@@ -92,7 +124,15 @@ def sports_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("🎾 Tennis", callback_data="sp_tennis"),
-            InlineKeyboardButton("🥊 UFC", callback_data="sp_ufc")
+            InlineKeyboardButton("🥊 UFC/MMA", callback_data="sp_ufc")
+        ],
+        [
+            InlineKeyboardButton("⚾ MLB", callback_data="sp_baseball"),
+            InlineKeyboardButton("🏒 NHL", callback_data="sp_hockey")
+        ],
+        [
+            InlineKeyboardButton("🏎️ F1", callback_data="sp_f1"),
+            InlineKeyboardButton("⛳ Golf", callback_data="sp_golf")
         ],
         [InlineKeyboardButton("🔙 Categories", callback_data="buy")]
     ])
@@ -132,7 +172,7 @@ def search_prompt_keyboard() -> InlineKeyboardMarkup:
 def events_keyboard(events: List[Any], page: int = 0) -> InlineKeyboardMarkup:
     """
     Events list keyboard (matches/games).
-    Shows events with number of sub-markets available.
+    Shows events with timing status (🔴 LIVE / 🟢 Upcoming) and date.
     """
     buttons = []
     per_page = 5
@@ -144,12 +184,40 @@ def events_keyboard(events: List[Any], page: int = 0) -> InlineKeyboardMarkup:
         real_idx = start + idx
         sub_count = len(event.markets) if hasattr(event, 'markets') else 0
         
+        # ── Determine timing badge ──
+        status_badge = ""
+        date_hint = ""
+        if hasattr(event, 'start_date') and event.start_date:
+            try:
+                from core.polymarket_client import event_status, parse_event_date
+                st = event_status(event.start_date, getattr(event, 'end_date', None))
+                if st == 'live':
+                    status_badge = "🔴 "
+                elif st == 'upcoming':
+                    status_badge = "🟢 "
+                    dt = parse_event_date(event.start_date)
+                    if dt:
+                        now = datetime.utcnow()
+                        diff = (dt.replace(tzinfo=None) - now).days
+                        if diff == 0:
+                            date_hint = " (Today)"
+                        elif diff == 1:
+                            date_hint = " (Tomorrow)"
+                        elif 1 < diff <= 7:
+                            date_hint = f" ({dt.strftime('%a')})"
+                        else:
+                            date_hint = f" ({dt.strftime('%d %b')})"
+            except Exception:
+                pass
+        
         # Truncate title and show sub-market count
-        title = event.title[:35] + "..." if len(event.title) > 35 else event.title
+        max_title = 28
+        title = event.title[:max_title] + "..." if len(event.title) > max_title else event.title
+        
         if sub_count > 1:
-            label = f"📋 {title} ({sub_count} bets)"
+            label = f"{status_badge}📋 {title}{date_hint} ({sub_count})"
         else:
-            label = f"📋 {title}"
+            label = f"{status_badge}📋 {title}{date_hint}"
         
         buttons.append([InlineKeyboardButton(label, callback_data=f"evt_{real_idx}")])
     
@@ -171,19 +239,38 @@ def sub_markets_keyboard(sub_markets: List[Any], event_idx: int) -> InlineKeyboa
     """
     Sub-markets within an event.
     Shows options like: Match Winner, Toss Winner, Top Scorer, Over/Under
+    Grouped by category (finals first, then matches, player props, etc.)
     """
     buttons = []
     
+    # Category emoji map
+    cat_emoji = {
+        'finals': '🏆',
+        'match': '⚔️',
+        'player': '🏅',
+        'series': '📊',
+        'prop': '🎲',
+        'other': '📊',
+    }
+    
     for idx, sub in enumerate(sub_markets[:8]):  # Max 8 sub-markets
+        # Categorize
+        try:
+            from core.polymarket_client import categorize_sub_market
+            cat = categorize_sub_market(sub.group_item_title)
+        except Exception:
+            cat = 'other'
+        emoji = cat_emoji.get(cat, '📊')
+        
         # Get a short label
         if sub.group_item_title:
-            label = sub.group_item_title[:35]
+            label = sub.group_item_title[:32]
         else:
-            label = sub.question[:35] if len(sub.question) > 35 else sub.question
+            label = sub.question[:32] if len(sub.question) > 32 else sub.question
         
         # Show price indicator
         yes_pct = int(sub.yes_price * 100)
-        label = f"📊 {label} ({yes_pct}%)"
+        label = f"{emoji} {label} ({yes_pct}%)"
         
         buttons.append([InlineKeyboardButton(label, callback_data=f"sub_{event_idx}_{idx}")])
     
@@ -214,7 +301,7 @@ def amount_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton("$50", callback_data="amt_50"),
             InlineKeyboardButton("$100", callback_data="amt_100"),
-            InlineKeyboardButton("✏️ Custom", callback_data="amt_c")
+            InlineKeyboardButton("✏️ Custom", callback_data="amt_custom")
         ],
         [InlineKeyboardButton("🔙 Back", callback_data="back_out")]
     ])

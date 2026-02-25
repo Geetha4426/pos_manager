@@ -142,6 +142,22 @@ SPORT_KEYWORDS = {
     'ufc': [
         'ufc', 'mma', 'mixed martial arts', 'bellator',
         'jones', 'adesanya', 'makhachev', 'volkanovski', "o'malley"
+    ],
+    'baseball': [
+        'mlb', 'baseball', 'world series', 'mlb playoffs',
+        'yankees', 'dodgers', 'astros', 'braves', 'phillies', 'mets'
+    ],
+    'hockey': [
+        'nhl', 'hockey', 'stanley cup', 'nhl playoffs',
+        'rangers', 'oilers', 'panthers', 'bruins', 'maple leafs'
+    ],
+    'f1': [
+        'formula 1', 'f1', 'grand prix', 'gp', 'motorsport',
+        'verstappen', 'hamilton', 'leclerc', 'norris', 'red bull racing'
+    ],
+    'golf': [
+        'golf', 'pga', 'masters', 'ryder cup', 'the open', 'us open golf',
+        'scottie scheffler', 'rory mcilroy', 'pga tour'
     ]
 }
 
@@ -154,25 +170,155 @@ for keywords in SPORT_KEYWORDS.values():
 # ═══════════════════════════════════════════════════════════════════
 # SPORT TAG SLUGS - for Gamma API server-side filtering
 # These map to the tag_slug parameter in the /events endpoint
+# Sourced from Polymarket website categories + Gamma API /tags
 # ═══════════════════════════════════════════════════════════════════
 SPORT_TAG_SLUGS = {
-    'cricket': ['cricket', 'ipl', 't20', 'world-cup-cricket'],
-    'football': ['football', 'soccer', 'premier-league', 'champions-league', 'epl'],
-    'nba': ['nba', 'basketball'],
-    'nfl': ['nfl', 'american-football', 'super-bowl'],
-    'tennis': ['tennis', 'wimbledon', 'us-open', 'australian-open'],
-    'ufc': ['ufc', 'mma', 'mixed-martial-arts']
+    'cricket': [
+        'cricket', 'ipl', 't20', 'world-cup-cricket', 'odi',
+        'test-cricket', 'big-bash', 'bbl', 'psl', 'cpl',
+        'the-hundred', 'asia-cup', 'india-cricket',
+    ],
+    'football': [
+        'football', 'soccer', 'premier-league', 'epl',
+        'champions-league', 'ucl', 'europa-league',
+        'la-liga', 'bundesliga', 'serie-a', 'ligue-1',
+        'fa-cup', 'mls', 'copa-america', 'world-cup',
+        'euro', 'carabao-cup', 'club-world-cup',
+    ],
+    'nba': [
+        'nba', 'basketball', 'nba-finals', 'nba-playoffs',
+        'nba-mvp', 'nba-draft', 'wnba', 'ncaa-basketball',
+        'march-madness',
+    ],
+    'nfl': [
+        'nfl', 'american-football', 'super-bowl', 'nfl-playoffs',
+        'nfl-draft', 'nfl-mvp', 'college-football',
+    ],
+    'tennis': [
+        'tennis', 'wimbledon', 'us-open', 'australian-open',
+        'french-open', 'roland-garros', 'atp', 'wta',
+        'atp-finals', 'davis-cup',
+    ],
+    'ufc': [
+        'ufc', 'mma', 'mixed-martial-arts', 'bellator',
+        'boxing', 'fight',
+    ],
+    'baseball': [
+        'mlb', 'baseball', 'world-series',
+    ],
+    'hockey': [
+        'nhl', 'hockey', 'stanley-cup',
+    ],
+    'f1': [
+        'formula-1', 'f1', 'grand-prix', 'motorsport',
+    ],
+    'golf': [
+        'golf', 'pga', 'masters', 'ryder-cup', 'the-open',
+    ],
 }
 
 # Primary search queries for each sport (used with _q parameter)
 SPORT_SEARCH_QUERIES = {
-    'cricket': ['cricket', 'ipl', 't20'],
-    'football': ['football', 'soccer', 'premier league'],
-    'nba': ['nba', 'basketball'],
-    'nfl': ['nfl', 'super bowl'],
-    'tennis': ['tennis', 'wimbledon'],
-    'ufc': ['ufc', 'mma']
+    'cricket': ['cricket', 'ipl', 't20', 'odi', 'test match'],
+    'football': ['football', 'soccer', 'premier league', 'champions league', 'la liga'],
+    'nba': ['nba', 'basketball', 'nba finals'],
+    'nfl': ['nfl', 'super bowl', 'american football'],
+    'tennis': ['tennis', 'wimbledon', 'us open', 'french open'],
+    'ufc': ['ufc', 'mma', 'boxing'],
+    'baseball': ['mlb', 'baseball', 'world series'],
+    'hockey': ['nhl', 'hockey', 'stanley cup'],
+    'f1': ['formula 1', 'f1', 'grand prix'],
+    'golf': ['golf', 'pga', 'masters'],
 }
+
+# ═══════════════════════════════════════════════════════════════════
+# EVENT CATEGORY LABELS - for grouping sub-markets by type
+# Maps groupItemTitle patterns to a display category
+# ═══════════════════════════════════════════════════════════════════
+EVENT_CATEGORIES = {
+    'finals': ['final', 'finals', 'championship', 'title'],
+    'match': ['match', 'winner', 'game', 'vs', 'versus'],
+    'player': ['top scorer', 'mvp', 'man of the match', 'highest', 'most'],
+    'series': ['series', 'over/under', 'total', 'spread'],
+    'prop': ['prop', 'special', 'bonus', 'first'],
+}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# DATE / TIME HELPERS
+# ═══════════════════════════════════════════════════════════════════
+
+def parse_event_date(date_str: Optional[str]) -> Optional[datetime]:
+    """Parse an ISO-8601 date string from Gamma API into datetime."""
+    if not date_str:
+        return None
+    try:
+        # Gamma API returns ISO format like "2025-06-15T14:00:00Z"
+        clean = date_str.replace('Z', '+00:00')
+        return datetime.fromisoformat(clean)
+    except (ValueError, TypeError):
+        pass
+    # Fallback: try common formats
+    for fmt in ('%Y-%m-%dT%H:%M:%S', '%Y-%m-%d', '%Y-%m-%dT%H:%M:%S.%f'):
+        try:
+            return datetime.strptime(date_str, fmt)
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def event_status(start_date: Optional[str], end_date: Optional[str]) -> str:
+    """
+    Determine event timing status.
+    Returns: 'live', 'upcoming', or 'past'
+    """
+    now = datetime.utcnow()
+    start = parse_event_date(start_date)
+    end = parse_event_date(end_date)
+
+    if end and end.replace(tzinfo=None) < now:
+        return 'past'
+    if start and start.replace(tzinfo=None) <= now:
+        return 'live'
+    return 'upcoming'
+
+
+def event_sort_key(ev: 'Event'):
+    """
+    Sort key for events: live first (by start asc), then upcoming (by start asc).
+    Past events are pushed to the end.
+    """
+    status = event_status(ev.start_date, ev.end_date)
+    start = parse_event_date(ev.start_date)
+    # epoch-far-future fallback so None dates sort last
+    ts = start.timestamp() if start else 9999999999
+    order = {'live': 0, 'upcoming': 1, 'past': 2}
+    return (order.get(status, 2), ts)
+
+
+def categorize_sub_market(group_item_title: str) -> str:
+    """Return a category label for a sub-market based on its groupItemTitle."""
+    title_lower = (group_item_title or '').lower()
+    for category, keywords in EVENT_CATEGORIES.items():
+        if any(kw in title_lower for kw in keywords):
+            return category
+    return 'other'
+
+
+def filter_and_sort_events(events: List['Event'], include_past: bool = False) -> List['Event']:
+    """
+    Filter out past events and sort by: live first → upcoming by date.
+
+    Args:
+        events: Raw list of Event objects
+        include_past: If True, keep past events at the end (default False)
+
+    Returns:
+        Sorted list of non-past events (unless include_past=True)
+    """
+    if not include_past:
+        events = [e for e in events if event_status(e.start_date, e.end_date) != 'past']
+    return sorted(events, key=event_sort_key)
 
 
 def detect_sport(text: str) -> str:
@@ -611,13 +757,16 @@ class PolymarketClient:
         """
         Fetch events for a specific league/series.
         
+        Results are sorted: 🔴 live first → 🟢 upcoming by date.
+        Past / closed events are excluded.
+
         Args:
             series_id: The series ID from /sports API
             sport: Sport name for keyword validation
             limit: Max events to return
         
         Returns:
-            List of Event objects
+            Sorted list of Event objects (live first, then upcoming)
         """
         events = []
         sport_kws = SPORT_KEYWORDS.get(sport.lower(), [sport.lower()]) if sport else []
@@ -629,7 +778,10 @@ class PolymarketClient:
                     'series_id': series_id,
                     'active': True,
                     'closed': False,
-                    'limit': limit * 2
+                    'archived': False,
+                    'order': 'startDate',
+                    'ascending': True,
+                    'limit': limit * 3  # fetch extra for post-filter
                 },
                 timeout=30
             )
@@ -649,10 +801,11 @@ class PolymarketClient:
                 
                 if parsed:
                     events.append(parsed)
-                    if len(events) >= limit:
-                        break
             
-            print(f"📊 Found {len(events)} events for series {series_id}")
+            # Filter past & sort: live first → upcoming by date
+            events = filter_and_sort_events(events, include_past=False)[:limit]
+            
+            print(f"📊 Found {len(events)} events for series {series_id} (live+upcoming)")
             
         except Exception as e:
             print(f"⚠️ League events fetch error: {e}")
@@ -691,6 +844,9 @@ class PolymarketClient:
         1. Server-side: Use tag_slug parameter for known sport tags
         2. Server-side fallback: Use _q search query on /markets endpoint
         3. Client-side: Keyword validation as final safety net
+
+        Results are sorted: 🔴 live first → 🟢 upcoming by date.
+        Past / closed events are excluded.
         """
         events = []
         seen_ids = set()  # Deduplicate across multiple queries
@@ -699,6 +855,9 @@ class PolymarketClient:
         tag_slugs = SPORT_TAG_SLUGS.get(sport_lower, [sport_lower])
         search_queries = SPORT_SEARCH_QUERIES.get(sport_lower, [sport_lower])
         
+        # Collect a generous pool of events, filter/sort at the end
+        pool_limit = limit * 4  # Fetch more than needed for filtering
+        
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 # ═══════════════════════════════════════════════════════════
@@ -706,13 +865,16 @@ class PolymarketClient:
                 # This is the most reliable method - asks API to filter for us
                 # ═══════════════════════════════════════════════════════════
                 for tag_slug in tag_slugs:
-                    if len(events) >= limit:
+                    if len(events) >= pool_limit:
                         break
                     
                     params = {
                         "tag_slug": tag_slug,
                         "active": True,
                         "closed": False,
+                        "archived": False,
+                        "order": "startDate",
+                        "ascending": True,
                         "limit": 50
                     }
                     
@@ -735,8 +897,6 @@ class PolymarketClient:
                                 parsed = self._parse_event(item, sport_lower, sport_kws)
                                 if parsed:
                                     events.append(parsed)
-                                    if len(events) >= limit:
-                                        break
                     except Exception as e:
                         print(f"⚠️ tag_slug {tag_slug} error: {e}")
                         continue
@@ -747,7 +907,7 @@ class PolymarketClient:
                 # ═══════════════════════════════════════════════════════════
                 if len(events) < limit:
                     for query in search_queries:
-                        if len(events) >= limit:
+                        if len(events) >= pool_limit:
                             break
                         
                         params = {
@@ -782,8 +942,6 @@ class PolymarketClient:
                                         event = self._market_to_event(item, sport_lower)
                                         if event:
                                             events.append(event)
-                                            if len(events) >= limit:
-                                                break
                         except Exception as e:
                             print(f"⚠️ _q={query} error: {e}")
                             continue
@@ -797,6 +955,9 @@ class PolymarketClient:
                     params = {
                         "active": True,
                         "closed": False,
+                        "archived": False,
+                        "order": "startDate",
+                        "ascending": True,
                         "limit": 100
                     }
                     
@@ -817,17 +978,25 @@ class PolymarketClient:
                             if parsed:
                                 seen_ids.add(event_id)
                                 events.append(parsed)
-                                if len(events) >= limit:
-                                    break
                     
         except Exception as e:
             print(f"⚠️ Events fetch error: {e}")
         
-        print(f"📊 Found {len(events)} {sport} events")
+        # ═══════════════════════════════════════════════════════════
+        # FILTER & SORT: Remove past, sort live-first → upcoming
+        # ═══════════════════════════════════════════════════════════
+        events = filter_and_sort_events(events, include_past=False)[:limit]
+        
+        print(f"📊 Found {len(events)} {sport} events (live+upcoming)")
         return events
     
     def _parse_event(self, item: Dict, sport: str, sport_kws: List[str]) -> Optional[Event]:
-        """Parse an event from API response with keyword validation."""
+        """
+        Parse an event from API response with keyword validation.
+        
+        - Extracts start_date / end_date (event-level or earliest sub-market)
+        - Sorts sub-markets by category (finals → match → player → prop → other)
+        """
         title = item.get('title', item.get('question', ''))
         description = item.get('description', '')
         combined = f"{title} {description}".lower()
@@ -836,9 +1005,17 @@ class PolymarketClient:
         if sport_kws and not any(kw in combined for kw in sport_kws):
             return None
         
+        # ── Extract dates from event level ──
+        ev_start = item.get('startDate') or item.get('start_date')
+        ev_end = item.get('endDate') or item.get('end_date')
+        
         # Parse sub-markets
         sub_markets = []
         raw_markets = item.get('markets', [])
+        
+        # Track earliest sub-market date as fallback
+        fallback_start = None
+        fallback_end = None
         
         for m in raw_markets:
             tokens = m.get('tokens', [])
@@ -852,13 +1029,20 @@ class PolymarketClient:
             outcome_prices = m.get('outcomePrices')
             if outcome_prices and (yes_price == 0.5 or no_price == 0.5):
                 try:
-                    import json
                     prices = json.loads(outcome_prices) if isinstance(outcome_prices, str) else outcome_prices
                     if len(prices) >= 2:
                         yes_price = float(prices[0])
                         no_price = float(prices[1])
-                except:
+                except Exception:
                     pass
+            
+            # Capture sub-market dates as fallback for event dates
+            m_start = m.get('startDateIso') or m.get('startDate')
+            m_end = m.get('endDateIso') or m.get('endDate')
+            if m_start and (not fallback_start or m_start < fallback_start):
+                fallback_start = m_start
+            if m_end and (not fallback_end or m_end > fallback_end):
+                fallback_end = m_end
             
             sub_markets.append(SubMarket(
                 condition_id=m.get('conditionId', m.get('id', '')),
@@ -886,13 +1070,21 @@ class PolymarketClient:
                 group_item_title='Match Winner'
             ))
         
+        # ── Sort sub-markets by category priority ──
+        cat_order = {'finals': 0, 'match': 1, 'player': 2, 'series': 3, 'prop': 4, 'other': 5}
+        sub_markets.sort(key=lambda s: cat_order.get(categorize_sub_market(s.group_item_title), 5))
+        
+        # Use event-level dates, falling back to sub-market dates
+        final_start = ev_start or fallback_start
+        final_end = ev_end or fallback_end
+        
         return Event(
             event_id=item.get('id', ''),
             title=title,
             description=description,
             sport=sport,
-            start_date=item.get('startDate'),
-            end_date=item.get('endDate'),
+            start_date=final_start,
+            end_date=final_end,
             markets=sub_markets
         )
     
@@ -933,7 +1125,8 @@ class PolymarketClient:
             title=question,
             description=item.get('description', ''),
             sport=sport,
-            end_date=item.get('endDate'),
+            start_date=item.get('startDateIso') or item.get('startDate'),
+            end_date=item.get('endDateIso') or item.get('endDate'),
             markets=[sub_market]
         )
     
@@ -1619,7 +1812,14 @@ class PolymarketClient:
         shares: Optional[float] = None,
         percent: float = 100
     ) -> OrderResult:
-        """Execute a market sell order."""
+        """
+        Execute a market sell order using FOK-first strategy.
+        
+        Strategy (from 5min_trade pattern):
+        1. FOK sell at market (instant exit, no 5-share minimum)
+        2. If FOK fails → GTC limit at best bid price
+        3. If GTC fails → GTC at best bid - 1¢ (discount)
+        """
         if self.is_paper or not self.clob_client:
             return await self._paper_sell(token_id, shares, percent)
         
@@ -1631,37 +1831,148 @@ class PolymarketClient:
                     return OrderResult(success=False, error="Position not found")
                 shares = pos.size * (percent / 100)
             
-            # MarketOrderArgs only takes token_id and amount
-            # For sells, we pass the number of shares to sell
-            order = MarketOrderArgs(
-                token_id=token_id,
-                amount=shares
-            )
+            if shares <= 0:
+                return OrderResult(success=False, error="Nothing to sell")
             
-            # Create and post the sell order
-            signed = self.clob_client.create_market_order(order)
-            resp = self.clob_client.post_order(signed, OrderType.FOK)
+            # ═══════════════════════════════════════════════════
+            # STEP 1: FOK sell (instant fill, no minimum)
+            # ═══════════════════════════════════════════════════
+            if Config.ENABLE_FOK_ORDERS:
+                try:
+                    order = MarketOrderArgs(
+                        token_id=token_id,
+                        amount=shares
+                    )
+                    signed = self.clob_client.create_market_order(order)
+                    resp = self.clob_client.post_order(signed, OrderType.FOK)
+                    
+                    success = resp.get('success', False) if isinstance(resp, dict) else getattr(resp, 'success', False)
+                    
+                    if success:
+                        order_id = resp.get('orderID', resp.get('order_id', '')) if isinstance(resp, dict) else getattr(resp, 'orderID', getattr(resp, 'order_id', ''))
+                        filled = resp.get('filled', resp.get('filledSize', 0)) if isinstance(resp, dict) else getattr(resp, 'filled', getattr(resp, 'filledSize', 0))
+                        avg_price = resp.get('avgPrice', resp.get('average_price', 0)) if isinstance(resp, dict) else getattr(resp, 'avgPrice', getattr(resp, 'average_price', 0))
+                        
+                        print(f"✅ FOK sell filled: {filled} shares @ {avg_price}")
+                        return OrderResult(
+                            success=True,
+                            order_id=str(order_id),
+                            filled_size=float(filled) if filled else shares,
+                            avg_price=float(avg_price) if avg_price else 0
+                        )
+                    else:
+                        print(f"⚠️ FOK sell failed, trying GTC fallback...")
+                except Exception as e:
+                    print(f"⚠️ FOK sell error: {e}, trying GTC fallback...")
             
-            # Handle response - could be dict or object with attributes
-            success = resp.get('success', False) if isinstance(resp, dict) else getattr(resp, 'success', False)
+            # ═══════════════════════════════════════════════════
+            # STEP 2: GTC limit at best bid price
+            # ═══════════════════════════════════════════════════
+            if Config.FOK_SELL_FALLBACK_GTC:
+                best_bid = await self.get_best_bid(token_id)
+                if best_bid and best_bid > 0.01:
+                    for attempt in range(Config.MAX_SELL_RETRIES):
+                        try:
+                            sell_price = best_bid if attempt == 0 else max(0.01, best_bid - Config.GTC_FALLBACK_DISCOUNT)
+                            
+                            order_args = OrderArgs(
+                                token_id=token_id,
+                                price=sell_price,
+                                size=shares,
+                                side=SELL
+                            )
+                            signed = self.clob_client.create_order(order_args)
+                            resp = self.clob_client.post_order(signed, OrderType.GTC)
+                            
+                            success = resp.get('success', False) if isinstance(resp, dict) else getattr(resp, 'success', False)
+                            
+                            if success:
+                                order_id = resp.get('orderID', resp.get('order_id', '')) if isinstance(resp, dict) else getattr(resp, 'orderID', getattr(resp, 'order_id', ''))
+                                print(f"✅ GTC sell placed at {sell_price*100:.0f}¢ (attempt {attempt+1})")
+                                return OrderResult(
+                                    success=True,
+                                    order_id=str(order_id),
+                                    filled_size=0,  # GTC may not fill immediately
+                                    avg_price=sell_price
+                                )
+                        except Exception as e:
+                            print(f"⚠️ GTC sell attempt {attempt+1} error: {e}")
+                            continue
             
-            if success:
-                order_id = resp.get('orderID', resp.get('order_id', '')) if isinstance(resp, dict) else getattr(resp, 'orderID', getattr(resp, 'order_id', ''))
-                filled = resp.get('filled', resp.get('filledSize', 0)) if isinstance(resp, dict) else getattr(resp, 'filled', getattr(resp, 'filledSize', 0))
-                avg_price = resp.get('avgPrice', resp.get('average_price', 0)) if isinstance(resp, dict) else getattr(resp, 'avgPrice', getattr(resp, 'average_price', 0))
-                
-                return OrderResult(
-                    success=True,
-                    order_id=str(order_id),
-                    filled_size=float(filled) if filled else 0,
-                    avg_price=float(avg_price) if avg_price else 0
-                )
-            else:
-                error = resp.get('error', resp.get('errorMsg', 'Order failed')) if isinstance(resp, dict) else getattr(resp, 'error', getattr(resp, 'errorMsg', 'Order failed'))
-                return OrderResult(success=False, error=str(error))
+            return OrderResult(success=False, error="All sell attempts failed (FOK + GTC)")
                 
         except Exception as e:
             return OrderResult(success=False, error=str(e))
+    
+    async def instant_sell(
+        self,
+        token_id: str,
+        shares: Optional[float] = None,
+        percent: float = 100
+    ) -> OrderResult:
+        """
+        Instant sell — designed for one-click Telegram button.
+        Same as sell_market but with extra logging and speed optimization.
+        """
+        import time
+        start = time.time()
+        result = await self.sell_market(token_id, shares, percent)
+        elapsed = (time.time() - start) * 1000
+        
+        if result.success:
+            print(f"⚡ Instant sell completed in {elapsed:.0f}ms")
+        else:
+            print(f"❌ Instant sell failed in {elapsed:.0f}ms: {result.error}")
+        
+        return result
+    
+    async def get_best_bid(self, token_id: str) -> float:
+        """Get the best bid price (what you receive when selling)."""
+        # Try WS cache first (fastest)
+        try:
+            from core.ws_client import get_ws_client
+            ws = get_ws_client()
+            bid = ws.get_best_bid(token_id)
+            if bid and bid > 0:
+                return bid
+        except Exception:
+            pass
+        
+        # Try order book
+        try:
+            book = await self.get_order_book(token_id, depth=1)
+            bids = book.get('bids', [])
+            if bids:
+                return float(bids[0]['price'])
+        except Exception:
+            pass
+        
+        # Fallback to midpoint
+        return await self.get_price(token_id)
+    
+    async def get_best_ask(self, token_id: str) -> float:
+        """Get the best ask price (what you pay when buying)."""
+        # Try WS cache first
+        try:
+            from core.ws_client import get_ws_client
+            ws = get_ws_client()
+            ask = ws.get_best_ask(token_id)
+            if ask and ask > 0:
+                return ask
+        except Exception:
+            pass
+        
+        # Try order book
+        try:
+            book = await self.get_order_book(token_id, depth=1)
+            asks = book.get('asks', [])
+            if asks:
+                return float(asks[0]['price'])
+        except Exception:
+            pass
+        
+        # Fallback to midpoint
+        return await self.get_price(token_id)
     
     async def _paper_sell(
         self, 

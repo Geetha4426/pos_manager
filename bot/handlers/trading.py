@@ -3,6 +3,7 @@ Trading Handlers
 
 Handles /buy command with EVENT-based sports navigation.
 Shows: Sport → Events (matches) → Sub-Markets (toss, top scorer, etc.) → Yes/No
+Events sorted: 🔴 LIVE first → 🟢 Upcoming by date. Past events excluded.
 """
 
 from telegram import Update
@@ -13,7 +14,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from config import Config
-from core.polymarket_client import get_polymarket_client
+from core.polymarket_client import get_polymarket_client, event_status
 from bot.keyboards.inline import (
     category_keyboard, sports_keyboard, leagues_keyboard, events_keyboard,
     sub_markets_keyboard, outcome_keyboard, amount_keyboard,
@@ -133,10 +134,20 @@ Found {len(leagues)} leagues/tournaments:
             )
             return
         
+        # Count live vs upcoming
+        live_count = sum(1 for e in events if event_status(e.start_date, e.end_date) == 'live')
+        upcoming_count = len(events) - live_count
+        status_line = ""
+        if live_count:
+            status_line += f"🔴 {live_count} live  "
+        if upcoming_count:
+            status_line += f"🟢 {upcoming_count} upcoming"
+        
         text = f"""
 {sport_emoji} <b>{sport.upper()} Events</b>
 
 Found {len(events)} active matches/events:
+{status_line}
 
 <i>Tap an event to see betting options</i>
 """
@@ -191,10 +202,20 @@ async def league_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
+    # Count live vs upcoming
+    live_count = sum(1 for e in events if event_status(e.start_date, e.end_date) == 'live')
+    upcoming_count = len(events) - live_count
+    status_line = ""
+    if live_count:
+        status_line += f"🔴 {live_count} live  "
+    if upcoming_count:
+        status_line += f"🟢 {upcoming_count} upcoming"
+    
     text = f"""
 {sport_emoji} <b>{league_name}</b>
 
 Found {len(events)} active matches:
+{status_line}
 
 <i>Tap an event to see betting options</i>
 """
@@ -255,10 +276,24 @@ async def event_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
+    # Build timing badge
+    st = event_status(event.start_date, event.end_date)
+    if st == 'live':
+        timing = "🔴 <b>LIVE</b>"
+    elif st == 'upcoming':
+        timing = "🟢 Upcoming"
+        from core.polymarket_client import parse_event_date
+        dt = parse_event_date(event.start_date)
+        if dt:
+            timing += f" — {dt.strftime('%d %b %H:%M')} UTC"
+    else:
+        timing = ""
+    
     text = f"""
 📊 <b>{event.title}</b>
+{timing}
 
-<b>Available Betting Options:</b>
+<b>Available Betting Options ({len(sub_markets)}):</b>
 
 <i>Select a market to trade:</i>
 """
@@ -455,7 +490,7 @@ async def amount_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     amount_str = query.data.split('_')[1]  # amt_10 -> 10
     
-    if amount_str == 'c':  # custom
+    if amount_str == 'custom':  # custom
         await query.edit_message_text(
             "✏️ <b>Custom Amount</b>\n\nEnter amount in USD (min $5, max $100):",
             parse_mode='HTML'
@@ -535,21 +570,33 @@ async def execute_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         event_title = event.title if event else (sub.question if sub else 'Position')
         sub_title = sub.group_item_title or sub.question if sub else ''
         
-        text = f"""
-✅ <b>Buy Executed!</b>
-
-📋 {event_title}
-🎯 {sub_title}
-📍 <b>Outcome:</b> {outcome}
-
-📦 <b>Shares:</b> {result.filled_size:.2f}
-💵 <b>Avg Price:</b> ${result.avg_price:.4f}
-🆔 <b>Order ID:</b> <code>{result.order_id[:16]}...</code>
-
-{'📝 Paper trade' if Config.is_paper_mode() else '💱 Live trade'}
-
-Use /positions to view your position.
-"""
+        # Add to position manager for live tracking
+        try:
+            from core.position_manager import get_position_manager
+            pm = get_position_manager()
+            await pm.add_position(
+                token_id=token_id,
+                condition_id=sub.condition_id if sub else '',
+                question=event_title,
+                outcome=outcome,
+                size=result.filled_size if result.filled_size > 0 else amount / (result.avg_price if result.avg_price > 0 else 0.5),
+                avg_price=result.avg_price if result.avg_price > 0 else 0.5,
+                current_price=result.avg_price if result.avg_price > 0 else 0.5,
+            )
+        except Exception:
+            pass
+        
+        text = (
+            f"✅ <b>Buy Executed!</b>\n\n"
+            f"📋 {event_title}\n"
+            f"🎯 {sub_title}\n"
+            f"📍 <b>Outcome:</b> {outcome}\n\n"
+            f"📦 <b>Shares:</b> {result.filled_size:.2f}\n"
+            f"💵 <b>Avg Price:</b> {result.avg_price*100:.1f}¢\n"
+            f"🆔 <code>{result.order_id[:16]}...</code>\n\n"
+            f"{'📝 Paper trade' if Config.is_paper_mode() else '💱 Live trade'}\n\n"
+            f"Use /positions to view (live P&L) ⚡"
+        )
     else:
         text = f"""
 ❌ <b>Buy Failed</b>

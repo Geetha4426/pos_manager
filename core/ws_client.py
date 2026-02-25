@@ -1,13 +1,24 @@
 """
 WebSocket Client for Polymarket CLOB
 
-Real-time price updates via WebSocket connection.
+Real-time price & orderbook updates via WebSocket.
+Based on Polymarket official WS protocol + 5min_trade patterns.
+
+Supports:
+- Token subscription with assets_ids (correct Polymarket protocol)
+- Price change events, book snapshots, last trade price
+- Best bid/ask tracking with PriceSnapshot objects
+- Automatic reconnection with exponential backoff
+- Callbacks for price updates (position tracking, alerts)
+- Integration with Telegram for live position updates
 """
 
 import asyncio
 import json
-from typing import Dict, Callable, Optional, Set
-from datetime import datetime
+import time
+from typing import Dict, Callable, Optional, Set, List
+from dataclasses import dataclass
+from collections import deque
 
 try:
     import websockets
@@ -22,207 +33,406 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import Config
 
 
-class PriceWebSocketClient:
+@dataclass
+class PriceSnapshot:
+    """Point-in-time price data with bid/ask."""
+    token_id: str
+    price: float
+    best_bid: float
+    best_ask: float
+    spread: float
+    timestamp: float
+    
+    @property
+    def mid_price(self) -> float:
+        if self.best_bid > 0 and self.best_ask > 0:
+            return (self.best_bid + self.best_ask) / 2
+        return self.price
+    
+    @property
+    def spread_pct(self) -> float:
+        if self.best_ask > 0:
+            return (self.spread / self.best_ask) * 100
+        return 0.0
+
+
+class PolymarketWebSocket:
     """
-    WebSocket client for real-time price updates from Polymarket CLOB.
+    WebSocket client for real-time Polymarket CLOB data.
+    
+    Uses the correct Polymarket WS protocol:
+    - Subscribe: {"assets_ids": [...], "type": "market"}
+    - Receives: initial snapshots, price_change events, book updates
     """
     
-    # Polymarket CLOB WebSocket endpoint
-    WS_URL = "wss://clob.polymarket.com/ws"
+    WS_URL = getattr(Config, 'POLYMARKET_WS_URL', 'wss://ws-subscriptions-clob.polymarket.com/ws/market')
     
     def __init__(self):
         self._ws = None
         self._running = False
         self._subscribed_tokens: Set[str] = set()
-        self._price_cache: Dict[str, float] = {}
-        self._callbacks: list = []
+        
+        # Price data
+        self._price_cache: Dict[str, PriceSnapshot] = {}
+        self._price_history: Dict[str, deque] = {}
+        
+        # Callbacks
+        self._price_callbacks: List[Callable] = []
+        self._position_callbacks: List[Callable] = []
+        
+        # Reconnection
         self._reconnect_delay = 1
-        self._max_reconnect_delay = 60
+        self._max_reconnect_delay = 30
+        self._connected = False
+        
+        # Stats
+        self._msg_count = 0
+        self._last_msg_time = 0
     
     @property
     def is_connected(self) -> bool:
-        return self._ws is not None and self._ws.open
+        return self._connected and self._ws is not None
     
-    def get_cached_price(self, token_id: str) -> Optional[float]:
-        """Get cached price for a token."""
+    def get_snapshot(self, token_id: str) -> Optional[PriceSnapshot]:
+        """Get latest price snapshot for a token."""
         return self._price_cache.get(token_id)
     
-    def add_price_callback(self, callback: Callable[[str, float], None]):
-        """Add callback to be called on price updates."""
-        self._callbacks.append(callback)
+    def get_price(self, token_id: str) -> Optional[float]:
+        """Get cached price for a token."""
+        snap = self._price_cache.get(token_id)
+        return snap.price if snap else None
     
-    async def subscribe(self, token_id: str):
-        """Subscribe to price updates for a token."""
-        self._subscribed_tokens.add(token_id)
+    def get_best_bid(self, token_id: str) -> Optional[float]:
+        """Get best bid price (what you get when selling)."""
+        snap = self._price_cache.get(token_id)
+        return snap.best_bid if snap else None
+    
+    def get_best_ask(self, token_id: str) -> Optional[float]:
+        """Get best ask price."""
+        snap = self._price_cache.get(token_id)
+        return snap.best_ask if snap else None
+    
+    def get_spread(self, token_id: str) -> Optional[float]:
+        """Get current spread."""
+        snap = self._price_cache.get(token_id)
+        return snap.spread if snap else None
+    
+    def get_price_history(self, token_id: str, limit: int = 60) -> List[PriceSnapshot]:
+        """Get price history for a token."""
+        history = self._price_history.get(token_id)
+        if history:
+            return list(history)[-limit:]
+        return []
+    
+    def get_all_prices(self) -> Dict[str, PriceSnapshot]:
+        """Get all cached price snapshots."""
+        return self._price_cache.copy()
+    
+    # Legacy compatibility
+    def get_cached_price(self, token_id: str) -> Optional[float]:
+        return self.get_price(token_id)
+    
+    def get_all_cached_prices(self) -> Dict[str, float]:
+        return {tid: snap.price for tid, snap in self._price_cache.items()}
+    
+    def add_price_callback(self, callback):
+        """Legacy: add callback(token_id, price)."""
+        async def wrapper(snap: PriceSnapshot):
+            await callback(snap.token_id, snap.price)
+        self._price_callbacks.append(wrapper)
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # CALLBACKS
+    # ═══════════════════════════════════════════════════════════════════
+    
+    def on_price_update(self, callback: Callable):
+        """Register callback: async def callback(snapshot: PriceSnapshot)"""
+        self._price_callbacks.append(callback)
+    
+    def on_position_update(self, callback: Callable):
+        """Register callback for position-relevant price changes."""
+        self._position_callbacks.append(callback)
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # SUBSCRIPTION
+    # ═══════════════════════════════════════════════════════════════════
+    
+    async def subscribe(self, token_ids):
+        """Subscribe to price updates for tokens. Accepts str or list."""
+        if isinstance(token_ids, str):
+            token_ids = [token_ids]
         
-        if self.is_connected:
-            await self._send_subscribe(token_id)
-    
-    async def unsubscribe(self, token_id: str):
-        """Unsubscribe from price updates for a token."""
-        self._subscribed_tokens.discard(token_id)
+        new_tokens = set(token_ids) - self._subscribed_tokens
+        self._subscribed_tokens.update(token_ids)
         
-        if self.is_connected:
-            await self._send_unsubscribe(token_id)
+        for tid in new_tokens:
+            if tid not in self._price_history:
+                self._price_history[tid] = deque(maxlen=120)
+        
+        if self.is_connected and new_tokens:
+            await self._send_subscribe(list(new_tokens))
     
-    async def _send_subscribe(self, token_id: str):
-        """Send subscribe message to WebSocket."""
-        if not self._ws:
+    async def unsubscribe(self, token_ids):
+        """Unsubscribe from tokens."""
+        if isinstance(token_ids, str):
+            token_ids = [token_ids]
+        for tid in token_ids:
+            self._subscribed_tokens.discard(tid)
+    
+    async def _send_subscribe(self, token_ids: List[str]):
+        """Send subscription using correct Polymarket WS protocol."""
+        if not self._ws or not token_ids:
             return
-        
         try:
-            msg = {
-                "type": "subscribe",
-                "channel": "price",
-                "assets": [token_id]
-            }
-            await self._ws.send(json.dumps(msg))
-            print(f"📡 Subscribed to price updates for {token_id[:12]}...")
+            sub_msg = json.dumps({
+                "assets_ids": token_ids,
+                "type": "market",
+            })
+            await self._ws.send(sub_msg)
+            print(f"📡 WS subscribed to {len(token_ids)} tokens")
         except Exception as e:
-            print(f"⚠️ Subscribe error: {e}")
+            print(f"⚠️ WS subscribe error: {e}")
     
-    async def _send_unsubscribe(self, token_id: str):
-        """Send unsubscribe message to WebSocket."""
-        if not self._ws:
-            return
-        
-        try:
-            msg = {
-                "type": "unsubscribe",
-                "channel": "price",
-                "assets": [token_id]
-            }
-            await self._ws.send(json.dumps(msg))
-        except Exception as e:
-            print(f"⚠️ Unsubscribe error: {e}")
+    # ═══════════════════════════════════════════════════════════════════
+    # CONNECTION
+    # ═══════════════════════════════════════════════════════════════════
     
     async def connect(self):
         """Connect to WebSocket and start receiving messages."""
         if not WEBSOCKETS_AVAILABLE:
-            print("❌ WebSocket not available - websockets package not installed")
+            print("❌ WebSocket not available - pip install websockets")
             return
         
         self._running = True
+        _logged_first = False
         
         while self._running:
             try:
-                async with websockets.connect(self.WS_URL) as ws:
+                async with websockets.connect(
+                    self.WS_URL,
+                    ping_interval=20,
+                    ping_timeout=60,
+                    close_timeout=10,
+                ) as ws:
                     self._ws = ws
+                    self._connected = True
                     self._reconnect_delay = 1
-                    print("✅ WebSocket connected to Polymarket CLOB")
+                    print(f"✅ Polymarket WS connected")
                     
-                    # Resubscribe to all tokens
-                    for token_id in self._subscribed_tokens:
-                        await self._send_subscribe(token_id)
+                    if self._subscribed_tokens:
+                        await self._send_subscribe(list(self._subscribed_tokens))
                     
-                    # Message loop
                     async for message in ws:
+                        if not self._running:
+                            break
+                        if not _logged_first:
+                            _logged_first = True
+                            preview = message[:200] if len(message) > 200 else message
+                            print(f"📨 First WS msg: {preview}")
                         await self._handle_message(message)
                         
             except websockets.ConnectionClosed as e:
-                print(f"⚠️ WebSocket connection closed: {e}")
+                print(f"⚠️ WS disconnected: {e}")
             except Exception as e:
-                print(f"⚠️ WebSocket error: {e}")
+                print(f"⚠️ WS error: {e}")
             
             self._ws = None
+            self._connected = False
             
             if self._running:
-                print(f"⏳ Reconnecting in {self._reconnect_delay}s...")
+                print(f"⏳ WS reconnecting in {self._reconnect_delay}s...")
                 await asyncio.sleep(self._reconnect_delay)
                 self._reconnect_delay = min(self._reconnect_delay * 2, self._max_reconnect_delay)
     
-    async def _handle_message(self, message: str):
-        """Handle incoming WebSocket message."""
+    async def _handle_message(self, raw: str):
+        """
+        Parse WebSocket message. Polymarket CLOB WS sends:
+        1. Initial snapshot: list of orderbook objects
+        2. price_change events: {"event_type": "price_change", ...}
+        3. Individual events with asset_id, price, best_bid, best_ask
+        4. last_trade_price events
+        """
         try:
-            data = json.loads(message)
+            data = json.loads(raw)
+            self._msg_count += 1
+            self._last_msg_time = time.time()
             
-            msg_type = data.get('type', '')
+            # Format 1: Initial snapshot — list of orderbook entries
+            if isinstance(data, list):
+                for entry in data:
+                    asset_id = entry.get('asset_id', '')
+                    if not asset_id:
+                        continue
+                    bids = entry.get('bids', [])
+                    asks = entry.get('asks', [])
+                    best_bid = 0.0
+                    best_ask = 0.0
+                    if bids:
+                        best_bid = max(float(b.get('price', b.get('p', 0))) for b in bids)
+                    if asks:
+                        best_ask = min(float(a.get('price', a.get('p', 1.0))) for a in asks)
+                    if best_bid > 0 or best_ask > 0:
+                        price = (best_bid + best_ask) / 2 if best_bid > 0 and best_ask > 0 else (best_ask or best_bid)
+                        await self._apply_price(asset_id, price, best_bid, best_ask)
+                return
             
-            if msg_type == 'price_update' or 'price' in data:
+            # Format 2: price_change event
+            event_type = data.get('event_type', '')
+            if event_type == 'price_change':
+                for ch in data.get('price_changes', []):
+                    asset_id = ch.get('asset_id', '')
+                    if not asset_id:
+                        continue
+                    best_bid = float(ch.get('best_bid', 0))
+                    best_ask = float(ch.get('best_ask', 0))
+                    price = float(ch.get('price', 0))
+                    if not price and best_ask > 0:
+                        price = best_ask
+                    elif not price and best_bid > 0 and best_ask > 0:
+                        price = (best_bid + best_ask) / 2
+                    if price > 0:
+                        await self._apply_price(asset_id, price, best_bid, best_ask)
+                return
+            
+            # Format 3: Individual book/trade updates
+            msg_type = data.get('type', data.get('event_type', ''))
+            if msg_type in ('book', 'price_change', 'last_trade_price', 'tick_size_change'):
+                token_id = data.get('asset_id', data.get('market', ''))
+                if not token_id:
+                    return
+                price = float(data.get('price', data.get('last_trade_price', data.get('mid', 0))))
+                best_bid = float(data.get('best_bid', 0))
+                best_ask = float(data.get('best_ask', 0))
+                if price <= 0 and best_ask > 0:
+                    price = best_ask
+                elif price <= 0 and best_bid > 0 and best_ask > 0:
+                    price = (best_bid + best_ask) / 2
+                if price > 0:
+                    await self._apply_price(token_id, price, best_bid, best_ask)
+            
+            # Format 4: Legacy price_update
+            elif data.get('type') == 'price_update' or ('price' in data and 'asset_id' in data):
                 token_id = data.get('asset_id', data.get('token_id', ''))
-                price = data.get('price', data.get('mid', 0))
-                
-                if token_id and price:
-                    self._price_cache[token_id] = float(price)
-                    
-                    # Call callbacks
-                    for callback in self._callbacks:
-                        try:
-                            await callback(token_id, float(price))
-                        except Exception as e:
-                            print(f"⚠️ Callback error: {e}")
-            
-            elif msg_type == 'book_update':
-                # Order book update
-                token_id = data.get('asset_id', '')
-                bids = data.get('bids', [])
-                asks = data.get('asks', [])
-                
-                # Calculate midpoint from order book
-                if bids and asks:
-                    best_bid = float(bids[0]['price']) if isinstance(bids[0], dict) else float(bids[0][0])
-                    best_ask = float(asks[0]['price']) if isinstance(asks[0], dict) else float(asks[0][0])
-                    mid = (best_bid + best_ask) / 2
-                    self._price_cache[token_id] = mid
+                price = float(data.get('price', data.get('mid', 0)))
+                if token_id and price > 0:
+                    await self._apply_price(token_id, price)
                     
         except json.JSONDecodeError:
             pass
-        except Exception as e:
-            print(f"⚠️ Message handling error: {e}")
+        except Exception:
+            pass
+    
+    async def _apply_price(self, token_id: str, price: float,
+                           best_bid: float = 0, best_ask: float = 0):
+        """Store price update and trigger all callbacks."""
+        if best_ask <= 0:
+            best_ask = price
+        if best_bid <= 0:
+            best_bid = max(0, price - 0.01)
+        spread = best_ask - best_bid if best_ask > best_bid else 0
+        
+        snap = PriceSnapshot(
+            token_id=token_id, price=price,
+            best_bid=best_bid, best_ask=best_ask,
+            spread=spread, timestamp=time.time()
+        )
+        
+        self._price_cache[token_id] = snap
+        
+        if token_id in self._price_history:
+            self._price_history[token_id].append(snap)
+        elif token_id in self._subscribed_tokens:
+            self._price_history[token_id] = deque(maxlen=120)
+            self._price_history[token_id].append(snap)
+        
+        for callback in self._price_callbacks:
+            try:
+                await callback(snap)
+            except Exception:
+                pass
+        
+        if token_id in self._subscribed_tokens:
+            for callback in self._position_callbacks:
+                try:
+                    await callback(snap)
+                except Exception:
+                    pass
     
     async def disconnect(self):
         """Disconnect from WebSocket."""
         self._running = False
+        self._connected = False
         if self._ws:
-            await self._ws.close()
+            try:
+                await self._ws.close()
+            except:
+                pass
             self._ws = None
-        print("🔌 WebSocket disconnected")
+        print("🔌 WS disconnected")
     
-    def get_all_cached_prices(self) -> Dict[str, float]:
-        """Get all cached prices."""
-        return self._price_cache.copy()
+    def get_stats(self) -> Dict:
+        return {
+            'connected': self.is_connected,
+            'subscribed_tokens': len(self._subscribed_tokens),
+            'cached_prices': len(self._price_cache),
+            'total_messages': self._msg_count,
+        }
 
 
-# Singleton instance
-_ws_client: Optional[PriceWebSocketClient] = None
+# ═══════════════════════════════════════════════════════════════════
+# SINGLETON
+# ═══════════════════════════════════════════════════════════════════
 
-def get_ws_client() -> PriceWebSocketClient:
+_ws_client: Optional[PolymarketWebSocket] = None
+
+def get_ws_client() -> PolymarketWebSocket:
     """Get the WebSocket client singleton."""
     global _ws_client
     if _ws_client is None:
-        _ws_client = PriceWebSocketClient()
+        _ws_client = PolymarketWebSocket()
     return _ws_client
 
 
+# Legacy alias
+PriceWebSocketClient = PolymarketWebSocket
+
+
 async def start_price_monitor(bot=None):
-    """
-    Start the WebSocket price monitor.
-    Optionally pass bot instance for notifications.
-    """
+    """Start the WebSocket price feed with optional Telegram alerts."""
     client = get_ws_client()
     
     if bot:
-        # Add callback to check alerts on price updates
-        async def check_alerts(token_id: str, price: float):
-            from core.alerts import get_alert_manager
-            manager = get_alert_manager()
-            alerts = await manager.get_alerts(active_only=True)
-            
-            for alert in alerts:
-                if alert.token_id != token_id:
-                    continue
-                
-                triggered = False
-                if alert.side == 'above' and price >= alert.trigger_price:
-                    triggered = True
-                elif alert.side == 'below' and price <= alert.trigger_price:
-                    triggered = True
-                
-                if triggered:
-                    await manager.mark_triggered(alert.id)
-                    # TODO: Send Telegram notification
-                    print(f"🔔 Alert triggered! {alert.market_question} @ {price*100:.0f}¢")
+        async def check_alerts(snap: PriceSnapshot):
+            try:
+                from core.alerts import get_alert_manager
+                manager = get_alert_manager()
+                alerts = await manager.get_alerts(active_only=True)
+                for alert in alerts:
+                    if alert.token_id != snap.token_id:
+                        continue
+                    triggered = False
+                    if alert.side == 'above' and snap.price >= alert.trigger_price:
+                        triggered = True
+                    elif alert.side == 'below' and snap.price <= alert.trigger_price:
+                        triggered = True
+                    if triggered:
+                        await manager.mark_triggered(alert.id)
+                        try:
+                            chat_id = Config.TELEGRAM_CHAT_ID
+                            if chat_id:
+                                emoji = "🔔" if alert.side == 'above' else "🔻"
+                                text = (
+                                    f"{emoji} <b>Alert Triggered!</b>\n\n"
+                                    f"📋 {alert.market_question}\n"
+                                    f"📍 Price: {snap.price*100:.0f}¢\n"
+                                    f"🎯 Target: {alert.trigger_price*100:.0f}¢ ({alert.side})"
+                                )
+                                await bot.send_message(chat_id=chat_id, text=text, parse_mode='HTML')
+                        except Exception:
+                            pass
+            except Exception:
+                pass
         
-        client.add_price_callback(check_alerts)
+        client.on_price_update(check_alerts)
     
     await client.connect()

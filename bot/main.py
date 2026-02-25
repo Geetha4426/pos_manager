@@ -2,7 +2,11 @@
 Polymarket Telegram Sniper Bot
 
 Main entry point - registers all handlers and starts the bot.
-Supports event-based sports navigation with sub-markets.
+Features:
+- Event-based sports navigation with sub-markets
+- WebSocket real-time price feed
+- Position manager with live P&L
+- Instant one-click sell (FOK → GTC fallback)
 """
 
 import asyncio
@@ -29,7 +33,8 @@ from bot.keyboards.inline import main_menu_keyboard
 # Import handlers
 from bot.handlers.positions import (
     positions_command, position_detail_callback, sell_callback,
-    confirm_sell_callback, custom_sell_input, CUSTOM_SELL_PERCENT
+    confirm_sell_callback, custom_sell_input, CUSTOM_SELL_PERCENT,
+    instant_sell_callback, refresh_positions_callback
 )
 from bot.handlers.trading import (
     buy_command, category_callback, sport_callback, league_callback,
@@ -69,24 +74,22 @@ async def start_command(update: Update, context):
     """Handle /start command - welcome message."""
     user = update.effective_user
     mode = "📝 Paper Trading" if Config.is_paper_mode() else "💱 Live Trading"
+    instant = "✅ ON" if Config.USE_INSTANT_SELL else "❌ OFF"
     
-    text = f"""
-🚀 <b>Polymarket Sniper Bot</b>
-
-Welcome, {user.first_name}! ⚡
-
-<b>Mode:</b> {mode}
-
-<b>Commands:</b>
-📊 /positions - View active positions
-💰 /balance - Wallet overview
-🛒 /buy - Buy new position
-🔍 /search - Search markets
-⭐ /favorites - Saved markets
-🔥 /hot - Trending markets
-
-<i>Lightning-fast trading at your fingertips! 🏎️</i>
-"""
+    text = (
+        f"🚀 <b>Polymarket Sniper Bot</b>\n\n"
+        f"Welcome, {user.first_name}! ⚡\n\n"
+        f"<b>Mode:</b> {mode}\n"
+        f"<b>Instant Sell:</b> {instant}\n\n"
+        f"<b>Commands:</b>\n"
+        f"📊 /positions - View positions (live P&L)\n"
+        f"💰 /balance - Wallet overview\n"
+        f"🛒 /buy - Buy new position\n"
+        f"🔍 /search - Search markets\n"
+        f"⭐ /favorites - Saved markets\n"
+        f"🔥 /hot - Trending markets\n\n"
+        f"<i>⚡ One-click instant sell • Live bid/ask prices</i>"
+    )
     
     await update.message.reply_text(
         text,
@@ -174,9 +177,27 @@ def main():
     
     # Initialize async components on startup
     async def post_init(application):
-        """Initialize async components like loading paper positions."""
+        """Initialize async components: client, WS feed, position tracker."""
+        # 1. Initialize Polymarket client (+ load paper positions)
         await init_polymarket_client()
-        print("✅ Polymarket client initialized with persisted positions")
+        print("✅ Polymarket client initialized")
+        
+        # 2. Initialize position manager (load positions + start tracking)
+        try:
+            from core.position_manager import init_position_manager
+            await init_position_manager()
+            print("✅ Position manager initialized")
+        except Exception as e:
+            print(f"⚠️ Position manager init error: {e}")
+        
+        # 3. Start WebSocket price feed in background
+        try:
+            from core.ws_client import start_price_monitor
+            bot = application.bot
+            asyncio.create_task(start_price_monitor(bot=bot))
+            print("📡 WebSocket price feed started")
+        except Exception as e:
+            print(f"⚠️ WebSocket start error: {e}")
     
     app.post_init = post_init
     
@@ -284,6 +305,12 @@ def main():
     app.add_handler(CallbackQueryHandler(sell_callback, pattern=r"^sell_\d+_(?!c$)\w+$"))
     app.add_handler(CallbackQueryHandler(confirm_sell_callback, pattern=r"^csell_\d+_\d+$"))
     
+    # Instant sell - ONE CLICK, NO CONFIRMATION
+    app.add_handler(CallbackQueryHandler(instant_sell_callback, pattern=r"^isell_\d+_\d+$"))
+    
+    # Refresh positions
+    app.add_handler(CallbackQueryHandler(refresh_positions_callback, pattern="^refresh_positions$"))
+    
     # Trading handlers - EVENT BASED FLOW
     app.add_handler(CallbackQueryHandler(category_callback, pattern="^cat_"))
     app.add_handler(CallbackQueryHandler(sport_callback, pattern="^sp_"))
@@ -331,7 +358,8 @@ def main():
     # ═══════════════════════════════════════════════════════════════════
     # START BOT
     # ═══════════════════════════════════════════════════════════════════
-    print("🚀 Starting Polymarket Telegram Bot...")
+    print("🚀 Starting Polymarket Telegram Sniper Bot...")
+    print("⚡ Features: Instant sell, live P&L, WebSocket prices")
     print("📊 Sports flow: Sport → Events → Sub-Markets → Yes/No")
     print("Press Ctrl+C to stop.\n")
     

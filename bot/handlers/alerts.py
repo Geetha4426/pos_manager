@@ -23,15 +23,18 @@ async def alerts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     alerts = await manager.get_alerts(user_id=user_id, active_only=True)
     
     if not alerts:
-        await update.message.reply_text(
+        text = (
             "🔔 <b>No Active Alerts</b>\n\n"
             "You don't have any price alerts set.\n\n"
             "<b>Commands:</b>\n"
             "• /alert <i>market price</i> - Set price alert\n"
             "• /stoploss <i>position price</i> - Set stop-loss\n"
-            "• /takeprofit <i>position price</i> - Set take-profit\n",
-            parse_mode='HTML'
+            "• /takeprofit <i>position price</i> - Set take-profit\n"
         )
+        if update.callback_query:
+            await update.callback_query.edit_message_text(text, parse_mode='HTML')
+        else:
+            await update.message.reply_text(text, parse_mode='HTML')
         return
     
     text = "🔔 <b>Active Alerts</b>\n\n"
@@ -61,11 +64,18 @@ async def alerts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     buttons.append([InlineKeyboardButton("🏠 Menu", callback_data="menu")])
     
-    await update.message.reply_text(
-        text,
-        parse_mode='HTML',
-        reply_markup=InlineKeyboardMarkup(buttons)
-    )
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            text,
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+    else:
+        await update.message.reply_text(
+            text,
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
 
 
 async def alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
