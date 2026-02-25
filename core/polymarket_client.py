@@ -599,30 +599,22 @@ class PolymarketClient:
         if self.is_paper or not self.clob_client:
             return self._paper_balance
         
-        # Try CLOB client's get_balance method first
+        # Use CLOB client's balance-allowance endpoint with proper params
         try:
             if self.clob_client:
-                bal = self.clob_client.get_balance_allowance()
+                from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+                params = BalanceAllowanceParams(
+                    asset_type=AssetType.COLLATERAL,
+                    signature_type=Config.SIGNATURE_TYPE
+                )
+                bal = self.clob_client.get_balance_allowance(params)
                 if isinstance(bal, dict):
-                    return float(bal.get('balance', 0)) / 1e6  # USDC has 6 decimals
-                return float(bal) / 1e6 if bal else 0.0
+                    raw = float(bal.get('balance', 0))
+                    # USDC uses 6 decimals on Polygon
+                    return raw / 1e6 if raw > 1000 else raw
+                return float(bal) / 1e6 if bal and float(bal) > 1000 else float(bal or 0)
         except Exception as e:
             print(f"⚠️ CLOB balance error: {e}")
-        
-        # Fallback: try CLOB REST API
-        try:
-            funder = self._funder_address
-            if funder:
-                async with httpx.AsyncClient(timeout=15) as client:
-                    resp = await client.get(
-                        f"{Config.POLYMARKET_CLOB_URL}/data/balance",
-                        params={"address": funder}
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        return float(data.get('balance', 0))
-        except Exception as e:
-            print(f"⚠️ REST balance fetch error: {e}")
         
         return 0.0
     
@@ -633,47 +625,36 @@ class PolymarketClient:
         
         funder = self._funder_address
         
-        # Method 1: CLOB data API /data/positions (most reliable for CLOB users)
-        try:
-            if funder:
-                async with httpx.AsyncClient(timeout=15) as client:
-                    resp = await client.get(
-                        f"{Config.POLYMARKET_CLOB_URL}/data/positions",
-                        params={"address": funder}
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        if data and isinstance(data, list) and len(data) > 0:
-                            return self._parse_gamma_positions(data)
-        except Exception as e:
-            print(f"⚠️ CLOB positions error: {e}")
-        
-        # Method 2: Gamma API — try multiple endpoints
-        for endpoint in ["/user-market-positions", "/positions"]:
-            try:
-                if funder:
-                    data = await self._fetch_with_retry(
-                        f"{Config.POLYMARKET_GAMMA_URL}{endpoint}",
-                        params={"user": funder, "redeemable": "false", "limit": "100"}
-                    )
-                    if data and isinstance(data, list) and len(data) > 0:
-                        return self._parse_gamma_positions(data)
-            except Exception:
-                pass
-        
-        # Method 3: Accumulate from filled trades via CLOB
+        # Method 1: Reconstruct from CLOB trade history (most reliable)
         try:
             if self.clob_client:
                 from py_clob_client.clob_types import TradeParams
-                trades_resp = self.clob_client.get_trades(
-                    TradeParams(maker_address=funder)
-                )
-                if trades_resp and isinstance(trades_resp, dict):
-                    trades = trades_resp.get('data', trades_resp.get('trades', []))
-                    if trades:
-                        return self._positions_from_trades(trades)
+                all_trades = []
+                cursor = 'MA=='
+                
+                # Paginate through trades
+                for _ in range(5):  # Max 5 pages
+                    trades_resp = self.clob_client.get_trades(
+                        TradeParams(maker_address=funder),
+                        next_cursor=cursor
+                    )
+                    if not trades_resp:
+                        break
+                    
+                    if isinstance(trades_resp, dict):
+                        trades = trades_resp.get('data', trades_resp.get('trades', []))
+                        if trades:
+                            all_trades.extend(trades)
+                        cursor = trades_resp.get('next_cursor', '')
+                        if not cursor or cursor == 'LTE=':
+                            break
+                    else:
+                        break
+                
+                if all_trades:
+                    return self._positions_from_trades(all_trades)
         except Exception as e:
-            print(f"⚠️ CLOB trades fallback error: {e}")
+            print(f"⚠️ CLOB trades error: {e}")
         
         return []
     
