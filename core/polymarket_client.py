@@ -336,6 +336,32 @@ def is_sports_market(question: str, description: str = '') -> bool:
     return any(keyword in text for keyword in ALL_SPORT_KEYWORDS)
 
 
+# Geo-block: Polymarket restricts trading from these countries/regions.
+# CLOB API returns 403/451 when accessed from a blocked IP.
+GEO_BLOCKED_REGIONS = [
+    'United States', 'Cuba', 'Iran', 'North Korea', 'Syria',
+    'Russia', 'Belarus', 'Myanmar', 'Venezuela', 'Zimbabwe', 'France'
+]
+GEO_BLOCK_MSG = (
+    "🚫 Polymarket trading is geo-restricted.\n"
+    "Your server IP appears to be in a blocked region.\n\n"
+    "Blocked regions: US, Cuba, Iran, North Korea, Syria, "
+    "Russia, Belarus, Myanmar, Venezuela, Zimbabwe, France.\n\n"
+    "💡 Deploy your bot on a server in an allowed region "
+    "(e.g., Singapore, UK, Germany, Japan)."
+)
+
+
+def is_geo_block_error(error_msg: str) -> bool:
+    """Detect if an error is caused by Polymarket geo-blocking."""
+    lower = error_msg.lower()
+    return any(kw in lower for kw in (
+        'geo', 'blocked', 'restricted', 'not available in your region',
+        'forbidden', '451', 'unavailable for legal',
+        'access denied', 'geofence'
+    ))
+
+
 class PolymarketClient:
     """
     Polymarket client with EVENT-based sports market discovery.
@@ -352,6 +378,7 @@ class PolymarketClient:
         self._paper_balance = 1000.0
         self._paper_positions: Dict[str, Dict] = {}
         self._funder_address = ''
+        self._geo_blocked = False  # Set if geo-block detected
         
         if not self.is_paper and CLOB_AVAILABLE and Config.POLYGON_PRIVATE_KEY:
             self._init_live_client()
@@ -389,7 +416,13 @@ class PolymarketClient:
             print(f"   ↳ Funder (proxy wallet): {actual_funder}")
             print(f"✅ Live Polymarket client initialized ({_time.time()-t0:.1f}s total)")
         except Exception as e:
-            print(f"⚠️ Failed to init live client: {e}")
+            err_str = str(e)
+            if is_geo_block_error(err_str):
+                self._geo_blocked = True
+                print(f"🚫 GEO-BLOCKED: {e}")
+                print(GEO_BLOCK_MSG)
+            else:
+                print(f"⚠️ Failed to init live client: {e}")
             self.clob_client = None
     
     async def _fetch_with_retry(
@@ -421,6 +454,20 @@ class PolymarketClient:
                     # Success
                     if resp.status_code == 200:
                         return resp.json()
+                    
+                    # Geo-block detection (403/451)
+                    if resp.status_code in (403, 451):
+                        body = ''
+                        try:
+                            body = resp.text[:200]
+                        except:
+                            pass
+                        if resp.status_code == 451 or is_geo_block_error(body):
+                            print(f"🚫 GEO-BLOCKED ({resp.status_code}): {body}")
+                            self._geo_blocked = True
+                            return None
+                        print(f"⚠️ Forbidden {resp.status_code} for {url}")
+                        return None
                     
                     # Permanent errors - don't retry
                     if resp.status_code in (400, 404):
@@ -594,65 +641,92 @@ class PolymarketClient:
     # BALANCE & POSITIONS
     # ═══════════════════════════════════════════════════════════════════
     
+    def _refresh_session(self):
+        """Re-derive API credentials if session expired."""
+        try:
+            if self.clob_client:
+                self.clob_client.set_api_creds(
+                    self.clob_client.create_or_derive_api_creds()
+                )
+                print("🔄 CLOB API session refreshed")
+        except Exception as e:
+            print(f"⚠️ Session refresh failed: {e}")
+    
+    def _clob_call(self, method, *args, **kwargs):
+        """Call a CLOB client method with auto-retry on auth/session errors."""
+        if self._geo_blocked:
+            raise Exception(GEO_BLOCK_MSG)
+        try:
+            return method(*args, **kwargs)
+        except Exception as e:
+            err_msg = str(e)
+            # Check for geo-block first
+            if is_geo_block_error(err_msg):
+                self._geo_blocked = True
+                print(f"🚫 GEO-BLOCKED: {e}")
+                raise Exception(GEO_BLOCK_MSG)
+            # Auth/session errors → refresh and retry
+            if any(kw in err_msg.lower() for kw in ('expired', 'unauthorized', 'auth', '401')):
+                print(f"🔄 Session error, re-authenticating: {e}")
+                self._refresh_session()
+                return method(*args, **kwargs)
+            raise
+    
     async def get_balance(self) -> float:
-        """Get USDC balance."""
+        """Get USDC balance available for trading."""
         if self.is_paper or not self.clob_client:
             return self._paper_balance
         
         # Use CLOB client's balance-allowance endpoint with proper params
         try:
-            if self.clob_client:
-                from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
-                params = BalanceAllowanceParams(
-                    asset_type=AssetType.COLLATERAL,
-                    signature_type=Config.SIGNATURE_TYPE
-                )
-                bal = self.clob_client.get_balance_allowance(params)
-                if isinstance(bal, dict):
-                    raw = float(bal.get('balance', 0))
-                    # USDC uses 6 decimals on Polygon
-                    return raw / 1e6 if raw > 1000 else raw
-                return float(bal) / 1e6 if bal and float(bal) > 1000 else float(bal or 0)
+            from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+            params = BalanceAllowanceParams(
+                asset_type=AssetType.COLLATERAL,
+                signature_type=Config.SIGNATURE_TYPE
+            )
+            bal = await asyncio.to_thread(
+                self._clob_call, self.clob_client.get_balance_allowance, params
+            )
+            
+            if isinstance(bal, dict):
+                raw = float(bal.get('balance', 0))
+            else:
+                raw = float(bal or 0)
+            
+            # USDC uses 6 decimals on Polygon — raw value is in micro-USDC
+            # e.g. $5 USDC = 5000000 raw, $0.50 = 500000 raw
+            # Threshold: anything >= 1000 is definitely raw (= $0.001+)
+            usdc = raw / 1e6 if raw >= 1000 else raw
+            print(f"💰 Balance: raw={raw}, USDC=${usdc:.6f}")
+            return usdc
         except Exception as e:
             print(f"⚠️ CLOB balance error: {e}")
         
         return 0.0
     
     async def get_positions(self) -> List[Position]:
-        """Get all open positions."""
+        """Get all open positions by reconstructing from trade history."""
         if self.is_paper or not self.clob_client:
             return self._get_paper_positions()
         
-        funder = self._funder_address
-        
-        # Method 1: Reconstruct from CLOB trade history (most reliable)
+        # get_trades() with L2 auth returns ALL trades for the authenticated user
+        # (both maker AND taker). Don't filter by maker_address — market orders
+        # are taker orders and would be excluded.
+        # The method auto-paginates and returns a flat list.
+        # Run in thread to avoid blocking the async event loop.
         try:
-            if self.clob_client:
-                from py_clob_client.clob_types import TradeParams
-                all_trades = []
-                cursor = 'MA=='
-                
-                # Paginate through trades
-                for _ in range(5):  # Max 5 pages
-                    trades_resp = self.clob_client.get_trades(
-                        TradeParams(maker_address=funder),
-                        next_cursor=cursor
-                    )
-                    if not trades_resp:
-                        break
-                    
-                    if isinstance(trades_resp, dict):
-                        trades = trades_resp.get('data', trades_resp.get('trades', []))
-                        if trades:
-                            all_trades.extend(trades)
-                        cursor = trades_resp.get('next_cursor', '')
-                        if not cursor or cursor == 'LTE=':
-                            break
-                    else:
-                        break
-                
-                if all_trades:
-                    return self._positions_from_trades(all_trades)
+            all_trades = await asyncio.to_thread(
+                self._clob_call, self.clob_client.get_trades
+            )
+            print(f"📊 Fetched {len(all_trades)} trades from CLOB")
+            if all_trades:
+                # Log first trade for field name debugging
+                if isinstance(all_trades[0], dict):
+                    sample_keys = list(all_trades[0].keys())
+                    print(f"   ↳ Trade fields: {sample_keys}")
+                positions = self._positions_from_trades(all_trades)
+                print(f"📦 Reconstructed {len(positions)} open positions")
+                return positions
         except Exception as e:
             print(f"⚠️ CLOB trades error: {e}")
         
@@ -1523,8 +1597,9 @@ class PolymarketClient:
             )
             
             # Use the correct method signature - create order then post with FOK
-            signed = self.clob_client.create_market_order(order)
-            resp = self.clob_client.post_order(signed, OrderType.FOK)
+            # _clob_call auto-refreshes session on auth errors
+            signed = self._clob_call(self.clob_client.create_market_order, order)
+            resp = self._clob_call(self.clob_client.post_order, signed, OrderType.FOK)
             
             # Handle response - could be dict or object with attributes
             success = resp.get('success', False) if isinstance(resp, dict) else getattr(resp, 'success', False)
@@ -1588,10 +1663,10 @@ class PolymarketClient:
                 side=BUY
             )
             
-            signed = self.clob_client.create_order(order_args)
+            signed = self._clob_call(self.clob_client.create_order, order_args)
             
             # Post as GTC (Good 'Til Cancelled)
-            resp = self.clob_client.post_order(signed, OrderType.GTC)
+            resp = self._clob_call(self.clob_client.post_order, signed, OrderType.GTC)
             
             success = resp.get('success', False) if isinstance(resp, dict) else getattr(resp, 'success', False)
             
@@ -1646,8 +1721,8 @@ class PolymarketClient:
                 side=SELL
             )
             
-            signed = self.clob_client.create_order(order_args)
-            resp = self.clob_client.post_order(signed, OrderType.GTC)
+            signed = self._clob_call(self.clob_client.create_order, order_args)
+            resp = self._clob_call(self.clob_client.post_order, signed, OrderType.GTC)
             
             success = resp.get('success', False) if isinstance(resp, dict) else getattr(resp, 'success', False)
             
@@ -1771,7 +1846,7 @@ class PolymarketClient:
             if market_id:
                 params.market = market_id
             
-            orders = self.clob_client.get_orders(params)
+            orders = self._clob_call(self.clob_client.get_orders, params)
             
             result = []
             for order in orders if orders else []:
@@ -1818,7 +1893,7 @@ class PolymarketClient:
             return True  # Paper mode - always succeeds
         
         try:
-            resp = self.clob_client.cancel(order_id)
+            resp = self._clob_call(self.clob_client.cancel, order_id)
             
             if isinstance(resp, dict):
                 return resp.get('canceled', False) or resp.get('success', False)
@@ -1843,9 +1918,9 @@ class PolymarketClient:
         
         try:
             if market_id:
-                resp = self.clob_client.cancel_market_orders(market_id)
+                resp = self._clob_call(self.clob_client.cancel_market_orders, market_id)
             else:
-                resp = self.clob_client.cancel_all()
+                resp = self._clob_call(self.clob_client.cancel_all)
             
             if isinstance(resp, dict):
                 return len(resp.get('canceled', []))
@@ -1976,8 +2051,8 @@ class PolymarketClient:
                                 size=shares,
                                 side=SELL
                             )
-                            signed = self.clob_client.create_order(order_args)
-                            resp = self.clob_client.post_order(signed, OrderType.GTC)
+                            signed = self._clob_call(self.clob_client.create_order, order_args)
+                            resp = self._clob_call(self.clob_client.post_order, signed, OrderType.GTC)
                             
                             success = resp.get('success', False) if isinstance(resp, dict) else getattr(resp, 'success', False)
                             
@@ -2110,10 +2185,23 @@ class PolymarketClient:
     async def async_init(self):
         """
         Async initialization - load paper positions from database.
-        Call this after creating the client to restore persisted state.
+        Also runs a geo-block check for live mode.
         """
         if self.is_paper:
             await self._load_paper_positions()
+        elif self.clob_client and not self._geo_blocked:
+            # Quick geo-block check: hit CLOB /time (no auth needed, fast)
+            try:
+                async with httpx.AsyncClient(timeout=10) as client:
+                    resp = await client.get(f"{Config.POLYMARKET_CLOB_URL}/time")
+                    if resp.status_code in (403, 451):
+                        self._geo_blocked = True
+                        print(f"🚫 GEO-BLOCKED: /time returned {resp.status_code}")
+                        print(GEO_BLOCK_MSG)
+                    else:
+                        print(f"🌍 Geo-check OK (CLOB /time = {resp.status_code})")
+            except Exception as e:
+                print(f"⚠️ Geo-check failed: {e}")
 
 
 # Singleton instance

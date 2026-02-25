@@ -19,6 +19,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     MessageHandler,
     ConversationHandler,
+    PicklePersistence,
     filters
 )
 
@@ -176,8 +177,16 @@ def main():
     
     Config.print_status()
     
-    # Build application
-    app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
+    # Persistence: user_data survives bot restarts (fixes "session expired" on buy)
+    import os
+    data_dir = os.path.dirname(Config.DATABASE_PATH)
+    if data_dir:
+        os.makedirs(data_dir, exist_ok=True)
+    persistence_path = os.path.join(data_dir or '.', 'bot_data.pickle')
+    persistence = PicklePersistence(filepath=persistence_path)
+    
+    # Build application with persistence
+    app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).persistence(persistence).build()
     
     # Initialize async components on startup
     async def post_init(application):

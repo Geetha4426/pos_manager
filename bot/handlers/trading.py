@@ -598,10 +598,23 @@ async def execute_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             f"Use /positions to view (live P&L) ⚡"
         )
     else:
-        text = f"""
+        error_msg = result.error or 'Unknown error'
+        # Detect geo-block for user-friendly message
+        from core.polymarket_client import is_geo_block_error
+        if is_geo_block_error(error_msg):
+            text = (
+                "🚫 <b>Trading Blocked (Geo-Restriction)</b>\n\n"
+                "Polymarket restricts trading from certain regions.\n"
+                "Your server IP is in a blocked region.\n\n"
+                "🌍 <b>Blocked:</b> US, Cuba, Iran, North Korea, Syria, "
+                "Russia, Belarus, Myanmar, Venezuela, Zimbabwe, France\n\n"
+                "💡 Deploy on a server in an allowed region."
+            )
+        else:
+            text = f"""
 ❌ <b>Buy Failed</b>
 
-Error: {result.error}
+Error: {error_msg}
 
 Please try again.
 """

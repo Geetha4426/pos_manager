@@ -20,6 +20,16 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /balance command - show wallet overview."""
     client = get_polymarket_client()
     
+    # Check geo-block status
+    if getattr(client, '_geo_blocked', False):
+        from core.polymarket_client import GEO_BLOCK_MSG
+        text = f"🚫 <b>Geo-Restricted</b>\n\n{GEO_BLOCK_MSG}"
+        if update.callback_query:
+            await update.callback_query.edit_message_text(text, parse_mode='HTML')
+        else:
+            await update.message.reply_text(text, parse_mode='HTML')
+        return
+    
     balance = await client.get_balance()
     positions = await client.get_positions()
     
