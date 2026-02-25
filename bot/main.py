@@ -178,19 +178,24 @@ def main():
     # Initialize async components on startup
     async def post_init(application):
         """Initialize async components: client, WS feed, position tracker."""
+        import time as _time
+        t0 = _time.time()
+        
         # 1. Initialize Polymarket client (+ load paper positions)
+        t1 = _time.time()
         await init_polymarket_client()
-        print("✅ Polymarket client initialized")
+        print(f"✅ Polymarket client initialized ({_time.time()-t1:.1f}s)")
         
         # 2. Initialize position manager (load positions + start tracking)
         try:
+            t2 = _time.time()
             from core.position_manager import init_position_manager
             await init_position_manager()
-            print("✅ Position manager initialized")
+            print(f"✅ Position manager initialized ({_time.time()-t2:.1f}s)")
         except Exception as e:
             print(f"⚠️ Position manager init error: {e}")
         
-        # 3. Start WebSocket price feed in background
+        # 3. Start WebSocket price feed in background (non-blocking)
         try:
             from core.ws_client import start_price_monitor
             bot = application.bot
@@ -198,6 +203,8 @@ def main():
             print("📡 WebSocket price feed started")
         except Exception as e:
             print(f"⚠️ WebSocket start error: {e}")
+        
+        print(f"🚀 Total init: {_time.time()-t0:.1f}s")
     
     app.post_init = post_init
     

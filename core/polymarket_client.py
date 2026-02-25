@@ -359,7 +359,9 @@ class PolymarketClient:
     
     def _init_live_client(self):
         """Initialize live trading client."""
+        import time as _time
         try:
+            t0 = _time.time()
             self.clob_client = ClobClient(
                 Config.POLYMARKET_CLOB_URL,
                 key=Config.POLYGON_PRIVATE_KEY,
@@ -367,8 +369,13 @@ class PolymarketClient:
                 signature_type=Config.SIGNATURE_TYPE,
                 funder=Config.FUNDER_ADDRESS if Config.FUNDER_ADDRESS else None
             )
+            print(f"   ↳ ClobClient created ({_time.time()-t0:.1f}s)")
+            
+            t1 = _time.time()
             self.clob_client.set_api_creds(self.clob_client.create_or_derive_api_creds())
-            print("✅ Live Polymarket client initialized")
+            print(f"   ↳ API creds derived ({_time.time()-t1:.1f}s)")
+            
+            print(f"✅ Live Polymarket client initialized ({_time.time()-t0:.1f}s total)")
         except Exception as e:
             print(f"⚠️ Failed to init live client: {e}")
             self.clob_client = None
