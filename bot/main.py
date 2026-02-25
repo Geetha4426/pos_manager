@@ -248,7 +248,8 @@ def main():
             CallbackQueryHandler(menu_callback, pattern="^menu$")
         ],
         name="custom_amount_conversation",
-        persistent=False
+        persistent=False,
+        per_message=False
     )
     app.add_handler(custom_amount_handler)
     
@@ -269,7 +270,8 @@ def main():
             CallbackQueryHandler(menu_callback, pattern="^menu$")
         ],
         name="custom_sell_conversation",
-        persistent=False
+        persistent=False,
+        per_message=False
     )
     app.add_handler(custom_sell_handler)
     
@@ -290,7 +292,8 @@ def main():
             CallbackQueryHandler(menu_callback, pattern="^menu$")
         ],
         name="search_conversation",
-        persistent=False
+        persistent=False,
+        per_message=False
     )
     app.add_handler(search_conv_handler)
     

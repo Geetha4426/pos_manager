@@ -619,33 +619,111 @@ class PolymarketClient:
         if self.is_paper or not self.clob_client:
             return self._get_paper_positions()
         
-        # Try CLOB client's built-in position fetching
-        try:
-            if self.clob_client:
-                positions_data = self.clob_client.get_positions()
-                if positions_data:
-                    return self._parse_positions(
-                        positions_data if isinstance(positions_data, list) else [positions_data]
-                    )
-        except Exception as e:
-            print(f"⚠️ CLOB positions error: {e}")
-        
-        # Fallback: try CLOB REST API
+        # Method 1: Gamma API /positions (primary source for live positions)
         try:
             funder = Config.FUNDER_ADDRESS
-            if funder:
-                async with httpx.AsyncClient(timeout=15) as client:
-                    resp = await client.get(
-                        f"{Config.POLYMARKET_CLOB_URL}/data/positions",
-                        params={"address": funder}
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        return self._parse_positions(data if isinstance(data, list) else [])
+            if funder and funder != 'your_funder_address_here':
+                data = await self._fetch_with_retry(
+                    f"{Config.POLYMARKET_GAMMA_URL}/positions",
+                    params={"user": funder, "redeemable": "false", "limit": "100"}
+                )
+                if data and isinstance(data, list) and len(data) > 0:
+                    return self._parse_gamma_positions(data)
         except Exception as e:
-            print(f"⚠️ REST positions fetch error: {e}")
+            print(f"⚠️ Gamma positions error: {e}")
+        
+        # Method 2: Accumulate from filled trades via CLOB
+        try:
+            if self.clob_client:
+                from py_clob_client.clob_types import TradeParams
+                trades_resp = self.clob_client.get_trades(
+                    TradeParams(maker_address=Config.FUNDER_ADDRESS)
+                )
+                if trades_resp and isinstance(trades_resp, dict):
+                    trades = trades_resp.get('data', trades_resp.get('trades', []))
+                    if trades:
+                        return self._positions_from_trades(trades)
+        except Exception as e:
+            print(f"⚠️ CLOB trades fallback error: {e}")
         
         return []
+    
+    def _parse_gamma_positions(self, data: List[Dict]) -> List[Position]:
+        """Parse positions from Gamma API /positions endpoint."""
+        positions = []
+        for item in data:
+            try:
+                size = float(item.get('size', 0))
+                if size <= 0.001:
+                    continue
+                
+                avg_price = float(item.get('avgPrice', item.get('price', 0.5)))
+                current_price = float(item.get('curPrice', item.get('currentPrice', avg_price)))
+                pnl = (current_price - avg_price) * size
+                pnl_percent = ((current_price / avg_price) - 1) * 100 if avg_price > 0 else 0
+                
+                # Gamma uses 'asset' or 'token' for token_id
+                token_id = item.get('asset', item.get('tokenId', item.get('token', '')))
+                
+                positions.append(Position(
+                    token_id=token_id,
+                    condition_id=item.get('conditionId', item.get('condition_id', '')),
+                    market_question=item.get('title', item.get('question', item.get('market', 'Unknown'))),
+                    outcome=item.get('outcome', item.get('side', 'Yes')),
+                    size=size,
+                    avg_price=avg_price,
+                    current_price=current_price,
+                    value=current_price * size,
+                    pnl=pnl,
+                    pnl_percent=pnl_percent
+                ))
+            except Exception as e:
+                print(f"⚠️ Gamma position parse error: {e}")
+        return positions
+    
+    def _positions_from_trades(self, trades: List[Dict]) -> List[Position]:
+        """Reconstruct positions from trade history."""
+        # Aggregate trades by token_id
+        agg: Dict[str, Dict] = {}
+        for trade in trades:
+            token_id = trade.get('asset_id', trade.get('tokenID', ''))
+            if not token_id:
+                continue
+            side = trade.get('side', 'BUY').upper()
+            size = float(trade.get('size', 0))
+            price = float(trade.get('price', 0))
+            
+            if token_id not in agg:
+                agg[token_id] = {
+                    'size': 0, 'cost': 0, 'question': trade.get('market', 'Unknown'),
+                    'outcome': trade.get('outcome', 'Yes'),
+                    'condition_id': trade.get('conditionId', '')
+                }
+            if side == 'BUY':
+                agg[token_id]['cost'] += size * price
+                agg[token_id]['size'] += size
+            else:
+                agg[token_id]['size'] -= size
+                agg[token_id]['cost'] -= size * price
+        
+        positions = []
+        for token_id, info in agg.items():
+            if info['size'] <= 0.001:
+                continue
+            avg_price = info['cost'] / info['size'] if info['size'] > 0 else 0.5
+            positions.append(Position(
+                token_id=token_id,
+                condition_id=info['condition_id'],
+                market_question=info['question'],
+                outcome=info['outcome'],
+                size=info['size'],
+                avg_price=avg_price,
+                current_price=avg_price,
+                value=avg_price * info['size'],
+                pnl=0,
+                pnl_percent=0
+            ))
+        return positions
     
     def _get_paper_positions(self) -> List[Position]:
         """Get paper trading positions."""
