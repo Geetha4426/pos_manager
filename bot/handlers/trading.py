@@ -426,6 +426,15 @@ async def outcome_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("⚠️ Token data unavailable for this market. Try another market.")
         return
     
+    # Refresh price from CLOB for accuracy (Gamma prices can be stale)
+    try:
+        client = get_polymarket_client()
+        live_price = await client.get_price(token_id)
+        if live_price > 0 and live_price != 0.5:
+            price = live_price
+    except Exception:
+        pass  # Keep Gamma price as fallback
+    
     context.user_data['selected_token_id'] = token_id
     context.user_data['selected_outcome'] = outcome
     context.user_data['selected_price'] = price

@@ -776,18 +776,28 @@ class PolymarketClient:
         return 0.0
     
     async def get_positions(self) -> List[Position]:
-        """Get ACTIVE open positions (filters out resolved/closed markets).
+        """Get ACTIVE open positions.
         
-        Strategy:
-        1. Fetch all trades from CLOB (auto-paginated, L2 auth)
-        2. Reconstruct net positions per token_id (buy - sell)
-        3. For each position with size > 0, check if market is still active
-           via CLOB get_market (condition_id) - filters resolved markets
-        4. Fetch live prices for active positions
+        Strategy (improved):
+        1. Try Data API first (https://data-api.polymarket.com/positions)
+           - Returns only truly open positions with current prices
+           - Much more reliable than reconstructing from trades
+        2. Fallback: Fetch trades from CLOB → reconstruct → filter
         """
         if self.is_paper or not self.clob_client:
             return self._get_paper_positions()
         
+        # ── PRIMARY: Data API (clean, only open positions) ──
+        try:
+            data_api_positions = await self._get_positions_data_api()
+            if data_api_positions:
+                print(f"✅ Data API: {len(data_api_positions)} open positions")
+                return data_api_positions
+            print(f"⚠️ Data API returned empty, falling back to trades")
+        except Exception as e:
+            print(f"⚠️ Data API error, falling back to trades: {e}")
+        
+        # ── FALLBACK: Reconstruct from CLOB trades ──
         try:
             all_trades = await asyncio.to_thread(
                 self._clob_call, self.clob_client.get_trades
@@ -816,6 +826,57 @@ class PolymarketClient:
             print(f"⚠️ CLOB trades error: {e}")
         
         return []
+    
+    async def _get_positions_data_api(self) -> List[Position]:
+        """Fetch positions from Polymarket Data API.
+        
+        Uses data-api.polymarket.com/positions endpoint which returns
+        only truly open positions with current prices and market metadata.
+        Pattern from PolyFlup (MrRakun35/Poly).
+        """
+        if not self._funder_address:
+            return []
+        
+        data = await self._fetch_with_retry(
+            "https://data-api.polymarket.com/positions",
+            params={'user': self._funder_address.lower()},
+            timeout=30
+        )
+        
+        if not data or not isinstance(data, list):
+            return []
+        
+        positions = []
+        for item in data:
+            try:
+                size = float(item.get('size', 0))
+                if size <= 0.001:
+                    continue
+                
+                avg_price = float(item.get('avgPrice', item.get('price', 0.5)))
+                cur_price = float(item.get('curPrice', item.get('currentPrice', avg_price)))
+                pnl = (cur_price - avg_price) * size
+                pnl_pct = ((cur_price / avg_price) - 1) * 100 if avg_price > 0 else 0
+                
+                token_id = item.get('asset', item.get('tokenId', item.get('token', '')))
+                condition_id = item.get('conditionId', item.get('condition_id', ''))
+                
+                positions.append(Position(
+                    token_id=token_id,
+                    condition_id=condition_id,
+                    market_question=item.get('title', item.get('question', item.get('market', f'Market {token_id[:8]}...'))),
+                    outcome=item.get('outcome', item.get('side', 'Yes')),
+                    size=size,
+                    avg_price=avg_price,
+                    current_price=cur_price,
+                    value=cur_price * size,
+                    pnl=pnl,
+                    pnl_percent=pnl_pct
+                ))
+            except Exception as e:
+                print(f"⚠️ Data API position parse error: {e}")
+        
+        return positions
     
     async def _filter_active_positions(self, positions: List[Position]) -> List[Position]:
         """Filter positions to only include active (non-resolved) markets.
@@ -950,6 +1011,30 @@ class PolymarketClient:
                                             pass
                                     except Exception:
                                         pass
+                            
+                            # ── Step 2b: outcomePrices resolution check ──
+                            # Pattern from PolyFlup settlement.py: if one outcome price
+                            # snaps to >= 0.95 and other <= 0.05, market is effectively resolved
+                            if market_info['is_active']:
+                                outcome_prices_raw = gamma_data.get('outcomePrices')
+                                if outcome_prices_raw:
+                                    try:
+                                        op = json.loads(outcome_prices_raw) if isinstance(outcome_prices_raw, str) else outcome_prices_raw
+                                        if len(op) >= 2:
+                                            p0, p1 = float(op[0]), float(op[1])
+                                            if (p0 >= 0.95 and p1 <= 0.05) or (p1 >= 0.95 and p0 <= 0.05):
+                                                market_info['is_active'] = False
+                                                print(f"   ⏭️ Resolved (price snap {p0:.2f}/{p1:.2f}): {market_info['question'][:40]}")
+                                    except Exception:
+                                        pass
+                            
+                            # ── Step 2c: enableOrderBook check ──
+                            # From Polymarket/agents gamma.py: non-tradable if order book disabled
+                            if market_info['is_active']:
+                                enable_ob = gamma_data.get('enableOrderBook', True)
+                                if isinstance(enable_ob, bool) and not enable_ob:
+                                    market_info['is_active'] = False
+                                    print(f"   ⏭️ Order book disabled: {market_info['question'][:40]}")
                     except Exception as e:
                         print(f"   ⚠️ Gamma enrichment error: {e}")
                 
@@ -1671,13 +1756,19 @@ class PolymarketClient:
         limit: int = 10,
         active_only: bool = True
     ) -> List[Market]:
-        """Search for markets by keyword."""
+        """Search for markets by keyword.
+        
+        Enhanced: filters by enableOrderBook=true for tradable markets,
+        uses outcomePrices for accurate pricing.
+        """
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 params = {
-                    "limit": limit * 2,
+                    "limit": limit * 3,  # fetch extra, filter locally
                     "active": active_only,
                     "closed": False,
+                    "archived": False,
+                    "enableOrderBook": True,
                     "_q": query
                 }
                 
@@ -1688,7 +1779,20 @@ class PolymarketClient:
                 
                 if resp.status_code == 200:
                     data = resp.json()
-                    return self._parse_markets(data)[:limit]
+                    markets = self._parse_markets(data)
+                    
+                    # Try refreshing stale prices from CLOB midpoint
+                    for m in markets:
+                        if m.yes_price == 0.5 and m.no_price == 0.5 and m.yes_token_id:
+                            try:
+                                mid = await self.get_price(m.yes_token_id)
+                                if mid > 0 and mid != 0.5:
+                                    m.yes_price = mid
+                                    m.no_price = round(1.0 - mid, 4)
+                            except Exception:
+                                pass
+                    
+                    return markets[:limit]
                     
         except Exception as e:
             print(f"⚠️ Search error: {e}")
@@ -1713,11 +1817,25 @@ class PolymarketClient:
         return None
     
     def _parse_markets(self, data: List[Dict]) -> List[Market]:
-        """Parse markets from API response."""
+        """Parse markets from API response.
+        
+        Enhanced: uses outcomePrices field when token prices are stale (0.5),
+        and filters out non-tradable markets (order book disabled, not accepting orders).
+        """
         markets = []
         
         for item in data:
             try:
+                # Skip non-tradable markets (from Polymarket/agents gamma.py pattern)
+                if item.get('closed', False) or item.get('archived', False):
+                    continue
+                enable_ob = item.get('enableOrderBook', True)
+                if isinstance(enable_ob, bool) and not enable_ob:
+                    continue
+                accepting = item.get('accepting_orders', item.get('acceptingOrders', True))
+                if isinstance(accepting, bool) and not accepting:
+                    continue
+                
                 tokens = item.get('tokens', [])
                 yes_token = next((t for t in tokens if t.get('outcome', '').lower() == 'yes'), {})
                 no_token = next((t for t in tokens if t.get('outcome', '').lower() == 'no'), {})
@@ -1725,14 +1843,31 @@ class PolymarketClient:
                 question = item.get('question', 'Unknown')
                 description = item.get('description', '')
                 
+                # Get prices from tokens
+                yes_price = float(yes_token.get('price', 0.5))
+                no_price = float(no_token.get('price', 0.5))
+                
+                # If prices look stale (both default 0.5), try outcomePrices field
+                # outcomePrices is a JSON string "[0.73, 0.27]" with more current data
+                if yes_price == 0.5 and no_price == 0.5:
+                    outcome_prices = item.get('outcomePrices')
+                    if outcome_prices:
+                        try:
+                            prices = json.loads(outcome_prices) if isinstance(outcome_prices, str) else outcome_prices
+                            if len(prices) >= 2:
+                                yes_price = float(prices[0])
+                                no_price = float(prices[1])
+                        except Exception:
+                            pass
+                
                 markets.append(Market(
                     condition_id=item.get('conditionId', item.get('id', '')),
                     question=question,
                     description=description,
                     yes_token_id=yes_token.get('token_id', ''),
                     no_token_id=no_token.get('token_id', ''),
-                    yes_price=float(yes_token.get('price', 0.5)),
-                    no_price=float(no_token.get('price', 0.5)),
+                    yes_price=yes_price,
+                    no_price=no_price,
                     volume=float(item.get('volume', 0)),
                     category=item.get('category', 'Other'),
                     sport=detect_sport(f"{question} {description}"),
@@ -1824,7 +1959,16 @@ class PolymarketClient:
         slippage: Optional[float] = None
     ) -> OrderResult:
         """
-        Execute a market buy order.
+        Execute a market buy order using FAK (Fill-And-Kill) strategy.
+        
+        FAK allows partial fills — whatever can be filled at market is executed,
+        the rest is cancelled. Much better fill rates than FOK (all-or-nothing).
+        Pattern from PolyFlup (MrRakun35/Poly).
+        
+        Strategy:
+        1. FAK market order (partial fills OK, best execution)
+        2. If FAK returns 0 fill → retry once with fresh price
+        3. Fallback: GTC limit at best ask + slippage
         
         Args:
             token_id: Token to buy
@@ -1845,47 +1989,95 @@ class PolymarketClient:
         if self.is_paper or not self.clob_client:
             return await self._paper_buy(token_id, amount_usd, market_info)
         
-        try:
-            # Get current price for slippage calculation
-            current_price = await self.get_price(token_id)
-            if current_price <= 0:
-                current_price = 0.50  # Fallback
-            
-            # Calculate max acceptable price with slippage
-            max_price = min(current_price * (1 + slippage / 100), 0.99)
-            
-            # MarketOrderArgs requires token_id, amount, and side
-            order = MarketOrderArgs(
-                token_id=token_id,
-                amount=amount_usd,
-                side=BUY
-            )
-            
-            # Use the correct method signature - create order then post with FOK
-            # _clob_call auto-refreshes session on auth errors
-            signed = self._clob_call(self.clob_client.create_market_order, order)
-            resp = self._clob_call(self.clob_client.post_order, signed, OrderType.FOK)
-            
-            # Handle response - could be dict or object with attributes
-            success = resp.get('success', False) if isinstance(resp, dict) else getattr(resp, 'success', False)
-            
-            if success:
-                order_id = resp.get('orderID', resp.get('order_id', '')) if isinstance(resp, dict) else getattr(resp, 'orderID', getattr(resp, 'order_id', ''))
-                filled = resp.get('filled', resp.get('filledSize', 0)) if isinstance(resp, dict) else getattr(resp, 'filled', getattr(resp, 'filledSize', 0))
-                avg_price = resp.get('avgPrice', resp.get('average_price', 0)) if isinstance(resp, dict) else getattr(resp, 'avgPrice', getattr(resp, 'average_price', 0))
-                
-                return OrderResult(
-                    success=True,
-                    order_id=str(order_id),
-                    filled_size=float(filled) if filled else 0,
-                    avg_price=float(avg_price) if avg_price else 0
+        last_error = ""
+        
+        # ═══════════════════════════════════════════════════
+        # STEP 1: FAK market order (up to 2 attempts)
+        # ═══════════════════════════════════════════════════
+        for attempt in range(2):
+            try:
+                order = MarketOrderArgs(
+                    token_id=token_id,
+                    amount=amount_usd,
+                    side=BUY
                 )
-            else:
-                error = resp.get('error', resp.get('errorMsg', 'Order failed')) if isinstance(resp, dict) else getattr(resp, 'error', getattr(resp, 'errorMsg', 'Order failed'))
-                return OrderResult(success=False, error=str(error))
                 
+                signed = self._clob_call(self.clob_client.create_market_order, order)
+                resp = self._clob_call(self.clob_client.post_order, signed, OrderType.FAK)
+                
+                success = resp.get('success', False) if isinstance(resp, dict) else getattr(resp, 'success', False)
+                
+                if success:
+                    order_id = resp.get('orderID', resp.get('order_id', '')) if isinstance(resp, dict) else getattr(resp, 'orderID', getattr(resp, 'order_id', ''))
+                    
+                    # FAK response: check size_matched for actual fill amount
+                    filled = 0.0
+                    for key in ('size_matched', 'filled', 'filledSize', 'sizeMatched'):
+                        val = resp.get(key, 0) if isinstance(resp, dict) else getattr(resp, key, 0)
+                        if val:
+                            filled = float(val)
+                            break
+                    
+                    avg_price = 0.0
+                    for key in ('avgPrice', 'average_price', 'averagePrice'):
+                        val = resp.get(key, 0) if isinstance(resp, dict) else getattr(resp, key, 0)
+                        if val:
+                            avg_price = float(val)
+                            break
+                    
+                    print(f"✅ FAK buy filled: {filled} shares @ {avg_price} (attempt {attempt+1})")
+                    return OrderResult(
+                        success=True,
+                        order_id=str(order_id),
+                        filled_size=filled if filled else 0,
+                        avg_price=avg_price if avg_price else 0
+                    )
+                else:
+                    last_error = resp.get('error', resp.get('errorMsg', 'FAK order failed')) if isinstance(resp, dict) else getattr(resp, 'error', getattr(resp, 'errorMsg', 'FAK order failed'))
+                    print(f"⚠️ FAK buy attempt {attempt+1} failed: {last_error}")
+                    
+            except Exception as e:
+                last_error = str(e)
+                print(f"⚠️ FAK buy attempt {attempt+1} error: {e}")
+            
+            # Brief pause before retry
+            if attempt == 0:
+                await asyncio.sleep(0.5)
+        
+        # ═══════════════════════════════════════════════════
+        # STEP 2: GTC limit fallback at best ask + slippage
+        # ═══════════════════════════════════════════════════
+        try:
+            best_ask = await self.get_best_ask(token_id)
+            if best_ask and best_ask > 0.01:
+                limit_price = min(best_ask * (1 + slippage / 100), 0.99)
+                shares = amount_usd / limit_price
+                
+                order_args = OrderArgs(
+                    token_id=token_id,
+                    price=round(limit_price, 2),
+                    size=round(shares, 2),
+                    side=BUY
+                )
+                signed = self._clob_call(self.clob_client.create_order, order_args)
+                resp = self._clob_call(self.clob_client.post_order, signed, OrderType.GTC)
+                
+                success = resp.get('success', False) if isinstance(resp, dict) else getattr(resp, 'success', False)
+                
+                if success:
+                    order_id = resp.get('orderID', resp.get('order_id', '')) if isinstance(resp, dict) else getattr(resp, 'orderID', getattr(resp, 'order_id', ''))
+                    print(f"✅ GTC buy limit placed at {limit_price*100:.0f}¢")
+                    return OrderResult(
+                        success=True,
+                        order_id=str(order_id),
+                        filled_size=0,  # GTC may not fill immediately
+                        avg_price=limit_price
+                    )
         except Exception as e:
-            return OrderResult(success=False, error=str(e))
+            print(f"⚠️ GTC buy fallback error: {e}")
+            last_error = str(e)
+        
+        return OrderResult(success=False, error=str(last_error))
     
     async def buy_limit(
         self,
@@ -2270,36 +2462,56 @@ class PolymarketClient:
                 return OrderResult(success=False, error="Nothing to sell")
             
             # ═══════════════════════════════════════════════════
-            # STEP 1: FOK sell (instant fill, no minimum)
+            # STEP 1: FAK sell first (partial fills OK), then FOK
+            # FAK is more likely to succeed than FOK (all-or-nothing)
             # ═══════════════════════════════════════════════════
             if Config.ENABLE_FOK_ORDERS:
-                try:
-                    order = MarketOrderArgs(
-                        token_id=token_id,
-                        amount=shares,
-                        side=SELL
-                    )
-                    signed = self.clob_client.create_market_order(order)
-                    resp = self.clob_client.post_order(signed, OrderType.FOK)
-                    
-                    success = resp.get('success', False) if isinstance(resp, dict) else getattr(resp, 'success', False)
-                    
-                    if success:
-                        order_id = resp.get('orderID', resp.get('order_id', '')) if isinstance(resp, dict) else getattr(resp, 'orderID', getattr(resp, 'order_id', ''))
-                        filled = resp.get('filled', resp.get('filledSize', 0)) if isinstance(resp, dict) else getattr(resp, 'filled', getattr(resp, 'filledSize', 0))
-                        avg_price = resp.get('avgPrice', resp.get('average_price', 0)) if isinstance(resp, dict) else getattr(resp, 'avgPrice', getattr(resp, 'average_price', 0))
-                        
-                        print(f"✅ FOK sell filled: {filled} shares @ {avg_price}")
-                        return OrderResult(
-                            success=True,
-                            order_id=str(order_id),
-                            filled_size=float(filled) if filled else shares,
-                            avg_price=float(avg_price) if avg_price else 0
+                for order_type in (OrderType.FAK, OrderType.FOK):
+                    try:
+                        order = MarketOrderArgs(
+                            token_id=token_id,
+                            amount=shares,
+                            side=SELL
                         )
-                    else:
-                        print(f"⚠️ FOK sell failed, trying GTC fallback...")
-                except Exception as e:
-                    print(f"⚠️ FOK sell error: {e}, trying GTC fallback...")
+                        signed = self.clob_client.create_market_order(order)
+                        resp = self.clob_client.post_order(signed, order_type)
+                        
+                        success = resp.get('success', False) if isinstance(resp, dict) else getattr(resp, 'success', False)
+                        
+                        if success:
+                            order_id = resp.get('orderID', resp.get('order_id', '')) if isinstance(resp, dict) else getattr(resp, 'orderID', getattr(resp, 'order_id', ''))
+                            
+                            # Check size_matched for actual fill (FAK may be partial)
+                            filled = 0.0
+                            for key in ('size_matched', 'filled', 'filledSize', 'sizeMatched'):
+                                val = resp.get(key, 0) if isinstance(resp, dict) else getattr(resp, key, 0)
+                                if val:
+                                    filled = float(val)
+                                    break
+                            if not filled:
+                                filled = shares
+                            
+                            avg_price = 0.0
+                            for key in ('avgPrice', 'average_price', 'averagePrice'):
+                                val = resp.get(key, 0) if isinstance(resp, dict) else getattr(resp, key, 0)
+                                if val:
+                                    avg_price = float(val)
+                                    break
+                            
+                            ot_name = 'FAK' if order_type == OrderType.FAK else 'FOK'
+                            print(f"✅ {ot_name} sell filled: {filled} shares @ {avg_price}")
+                            return OrderResult(
+                                success=True,
+                                order_id=str(order_id),
+                                filled_size=filled,
+                                avg_price=avg_price
+                            )
+                        else:
+                            ot_name = 'FAK' if order_type == OrderType.FAK else 'FOK'
+                            print(f"⚠️ {ot_name} sell failed, trying next...")
+                    except Exception as e:
+                        ot_name = 'FAK' if order_type == OrderType.FAK else 'FOK'
+                        print(f"⚠️ {ot_name} sell error: {e}, trying next...")
             
             # ═══════════════════════════════════════════════════
             # STEP 2: GTC limit at best bid price
