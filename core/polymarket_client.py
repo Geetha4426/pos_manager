@@ -2148,6 +2148,18 @@ class PolymarketClient:
         # calling create_or_derive_api_creds() before every buy adds latency
         # and can cause race conditions. Creds are valid for the session lifetime.
         
+        # Sync on-chain USDC allowance with CLOB API (reference: 5min_trade repo)
+        try:
+            from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+            ba_sig = getattr(builder, 'sig_type', Config.SIGNATURE_TYPE) if builder else Config.SIGNATURE_TYPE
+            ba_params = BalanceAllowanceParams(
+                asset_type=AssetType.COLLATERAL,
+                signature_type=ba_sig,
+            )
+            self.clob_client.update_balance_allowance(ba_params)
+        except Exception as e:
+            print(f"⚠️ update_balance_allowance: {e}")
+        
         last_error = ""
         
         # ═══════════════════════════════════════════════════
@@ -2649,6 +2661,21 @@ class PolymarketClient:
             
             if shares <= 0:
                 return OrderResult(success=False, error="Nothing to sell")
+            
+            # Set conditional token allowance before selling (required for proxy wallets)
+            # Reference: 5min_trade _ensure_conditional_allowance pattern
+            try:
+                from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+                builder = getattr(self.clob_client, 'builder', None)
+                ba_sig = getattr(builder, 'sig_type', Config.SIGNATURE_TYPE) if builder else Config.SIGNATURE_TYPE
+                cond_params = BalanceAllowanceParams(
+                    asset_type=AssetType.CONDITIONAL,
+                    token_id=token_id,
+                    signature_type=ba_sig,
+                )
+                self.clob_client.update_balance_allowance(cond_params)
+            except Exception as e:
+                print(f"⚠️ Conditional allowance update: {e}")
             
             # ═══════════════════════════════════════════════════
             # STEP 1: FAK sell first (partial fills OK), then FOK

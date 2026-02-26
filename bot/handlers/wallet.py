@@ -199,6 +199,8 @@ async def test_sign_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         signer_addr = '?'
     
+    post_status = None  # Track POST result for diagnostics
+    
     lines = [
         f"🔧 <b>Signature Test</b>\n",
         f"<b>sig_type:</b> {sig_type} (0=EOA, 1=Proxy, 2=GnosisSafe)",
@@ -349,6 +351,7 @@ async def test_sign_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             relay_url = cc.host + "/order"
             async with httpx.AsyncClient(timeout=15) as hc:
                 raw_resp = await hc.post(relay_url, content=serialized.encode(), headers=headers)
+            post_status = raw_resp.status_code
             
             lines.append(f"\n<b>POST {post_label} → {esc(cc.host[:30])}:</b>")
             lines.append(f"   status: {raw_resp.status_code}")
@@ -375,10 +378,96 @@ async def test_sign_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         lines.append("⏭️ Skipping post test (signing failed)")
     
-    # Summary
-    lines.append("")
-    lines.append("<b>If 'invalid signature':</b>")
-    lines.append("→ /disconnect → /connect with correct funder")
-    lines.append("→ Check operator approval on polygonscan")
+    # ═══ On-chain diagnostics ═══
+    import httpx  # Ensure available outside POST try block
+    lines.append(f"\n<b>═══ On-chain Checks ═══</b>")
+    rpc_url = "https://polygon-bor-rpc.publicnode.com"
+    usdc_contract = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"  # USDC.e
     
-    await update.message.reply_text('\n'.join(lines), parse_mode='HTML')
+    # Check USDC balance on both addresses
+    for label, addr in [("EOA", str(signer_addr)), ("Funder", str(funder))]:
+        if not addr or addr == '?' or not addr.startswith('0x'):
+            continue
+        try:
+            padded = addr[2:].lower().zfill(64)
+            call_data = f"0x70a08231{padded}"  # balanceOf(address)
+            async with httpx.AsyncClient(timeout=10) as hc:
+                rpc_resp = await hc.post(rpc_url, json={
+                    "jsonrpc": "2.0", "method": "eth_call",
+                    "params": [{"to": usdc_contract, "data": call_data}, "latest"],
+                    "id": 1,
+                })
+                result = rpc_resp.json().get("result", "0x0")
+                balance_wei = int(result, 16)
+                balance_usd = balance_wei / 1e6
+                emoji = "💰" if balance_usd > 0.01 else "⚠️"
+                lines.append(f"   {emoji} {label} USDC.e: ${balance_usd:.2f}")
+        except Exception as e:
+            lines.append(f"   ⚠️ {label} balance: {esc(str(e)[:50])}")
+    
+    # Check operator approval on exchange contracts (only for proxy sig types)
+    if str(sig_type) not in ('0', '?') and str(signer_addr).startswith('0x') and str(funder).startswith('0x'):
+        exchanges = [
+            ("CTF", "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"),
+            ("NegRisk", "0xC5d563A36AE78145C45a50134d48A1215220f80a"),
+        ]
+        owner_padded = str(funder)[2:].lower().zfill(64)
+        operator_padded = str(signer_addr)[2:].lower().zfill(64)
+        # isApprovedForAll(address,address) selector
+        call_data = f"0xe985e9c5{owner_padded}{operator_padded}"
+        for ex_name, ex_addr in exchanges:
+            try:
+                async with httpx.AsyncClient(timeout=10) as hc:
+                    rpc_resp = await hc.post(rpc_url, json={
+                        "jsonrpc": "2.0", "method": "eth_call",
+                        "params": [{"to": ex_addr, "data": call_data}, "latest"],
+                        "id": 1,
+                    })
+                    result = rpc_resp.json().get("result", "0x0")
+                    approved = int(result, 16) != 0
+                    st = "✅ Approved" if approved else "❌ NOT approved"
+                    lines.append(f"   {ex_name}: signer→funder {st}")
+            except Exception as e:
+                lines.append(f"   ⚠️ {ex_name}: {esc(str(e)[:50])}")
+    
+    # Check CLOB allowance
+    try:
+        from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+        ba_params = BalanceAllowanceParams(
+            asset_type=AssetType.COLLATERAL,
+            signature_type=int(sig_type) if str(sig_type).isdigit() else 0,
+        )
+        ba_resp = cc.get_balance_allowance(ba_params)
+        if isinstance(ba_resp, dict):
+            allowance = float(ba_resp.get('allowance', 0))
+            if allowance > 1_000_000:
+                allowance /= 1e6
+            clob_bal = float(ba_resp.get('balance', 0))
+            if clob_bal > 1_000_000:
+                clob_bal /= 1e6
+            lines.append(f"   CLOB balance: ${clob_bal:.2f}, allowance: ${allowance:.2f}")
+    except Exception as e:
+        lines.append(f"   ⚠️ CLOB allowance: {esc(str(e)[:60])}")
+    
+    # Actionable summary
+    lines.append("")
+    if post_status == 400:
+        lines.append("<b>⚠️ Fixing 'invalid signature':</b>")
+        lines.append("1️⃣ Try <b>sig_type=0</b> (EOA mode):")
+        lines.append("   /disconnect → /connect")
+        lines.append("   Leave funder empty, pick EOA")
+        lines.append("2️⃣ Ensure USDC is on your EOA address")
+        lines.append("3️⃣ If using proxy wallet:")
+        lines.append("   Operator approval must exist on-chain")
+    else:
+        lines.append("<b>If issues persist:</b>")
+        lines.append("→ /disconnect → /connect with correct settings")
+    
+    # Send (split if too long for Telegram's 4096 limit)
+    full_text = '\n'.join(lines)
+    if len(full_text) > 4000:
+        mid = len(lines) // 2
+        await update.message.reply_text('\n'.join(lines[:mid]), parse_mode='HTML')
+        await update.message.reply_text('\n'.join(lines[mid:]), parse_mode='HTML')
+    else:
+        await update.message.reply_text(full_text, parse_mode='HTML')
