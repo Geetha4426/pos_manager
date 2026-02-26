@@ -450,8 +450,13 @@ def main():
     print("� Multi-user: /connect → /unlock → trade")
     print("�📊 Sports flow: Sport → Events → Sub-Markets → Yes/No")
     print("Press Ctrl+C to stop.\n")
+        # Delete any existing webhook and drop pending updates to avoid 409 Conflict
+    # This ensures only this instance polls for updates
+    async def post_init(application):
+        await application.bot.delete_webhook(drop_pending_updates=True)
+        print("✅ Webhook cleared, polling mode active")
     
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    app.post_init = post_init    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
 if __name__ == "__main__":
