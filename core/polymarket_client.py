@@ -54,6 +54,8 @@ class SubMarket:
     yes_price: float
     no_price: float
     group_item_title: str = ""  # e.g., "Toss Winner", "Top Scorer"
+    outcome_yes: str = "Yes"    # Actual label: "Yes" or team name like "India"
+    outcome_no: str = "No"      # Actual label: "No" or team name like "Pakistan"
 
 
 @dataclass
@@ -93,6 +95,8 @@ class Market:
     category: str
     sport: str = ""
     end_date: Optional[str] = None
+    outcome_yes: str = "Yes"    # Actual label: "Yes" or team name like "India"
+    outcome_no: str = "No"      # Actual label: "No" or team name like "Pakistan"
 
 
 @dataclass
@@ -1537,8 +1541,38 @@ class PolymarketClient:
         
         for m in raw_markets:
             tokens = m.get('tokens', [])
-            yes_token = next((t for t in tokens if t.get('outcome', '').lower() == 'yes'), {})
-            no_token = next((t for t in tokens if t.get('outcome', '').lower() == 'no'), {})
+            
+            # Parse tokens - handle both Yes/No and team-name outcomes
+            yes_token = next((t for t in tokens if t.get('outcome', '').lower() == 'yes'), None)
+            no_token = next((t for t in tokens if t.get('outcome', '').lower() == 'no'), None)
+            
+            # If no Yes/No tokens found, use first/second token (team names etc.)
+            outcome_yes = 'Yes'
+            outcome_no = 'No'
+            if not yes_token and len(tokens) >= 1:
+                yes_token = tokens[0]
+                outcome_yes = tokens[0].get('outcome', 'Yes')
+            if not no_token and len(tokens) >= 2:
+                no_token = tokens[1]
+                outcome_no = tokens[1].get('outcome', 'No')
+            
+            yes_token = yes_token or {}
+            no_token = no_token or {}
+            
+            # Get token IDs (with clobTokenIds fallback)
+            yes_token_id = yes_token.get('token_id', '')
+            no_token_id = no_token.get('token_id', '')
+            
+            if not yes_token_id or not no_token_id:
+                clob_ids = m.get('clobTokenIds')
+                if clob_ids:
+                    try:
+                        ids = json.loads(clob_ids) if isinstance(clob_ids, str) else clob_ids
+                        if len(ids) >= 2:
+                            if not yes_token_id: yes_token_id = ids[0]
+                            if not no_token_id: no_token_id = ids[1]
+                    except Exception:
+                        pass
             
             # Try to get prices from outcomePrices if tokens don't have them
             yes_price = float(yes_token.get('price', 0.5))
@@ -1565,27 +1599,55 @@ class PolymarketClient:
             sub_markets.append(SubMarket(
                 condition_id=m.get('conditionId', m.get('id', '')),
                 question=m.get('question', m.get('groupItemTitle', 'Unknown')),
-                yes_token_id=yes_token.get('token_id', ''),
-                no_token_id=no_token.get('token_id', ''),
+                yes_token_id=yes_token_id,
+                no_token_id=no_token_id,
                 yes_price=yes_price,
                 no_price=no_price,
-                group_item_title=m.get('groupItemTitle', '')
+                group_item_title=m.get('groupItemTitle', ''),
+                outcome_yes=outcome_yes,
+                outcome_no=outcome_no
             ))
         
         # If no sub-markets, create one from event itself
         if not sub_markets:
             tokens = item.get('tokens', [])
-            yes_token = next((t for t in tokens if t.get('outcome', '').lower() == 'yes'), {})
-            no_token = next((t for t in tokens if t.get('outcome', '').lower() == 'no'), {})
+            yes_token = next((t for t in tokens if t.get('outcome', '').lower() == 'yes'), None)
+            no_token = next((t for t in tokens if t.get('outcome', '').lower() == 'no'), None)
+            
+            oe_yes, oe_no = 'Yes', 'No'
+            if not yes_token and len(tokens) >= 1:
+                yes_token = tokens[0]
+                oe_yes = tokens[0].get('outcome', 'Yes')
+            if not no_token and len(tokens) >= 2:
+                no_token = tokens[1]
+                oe_no = tokens[1].get('outcome', 'No')
+            yes_token = yes_token or {}
+            no_token = no_token or {}
+            
+            # clobTokenIds fallback
+            ytid = yes_token.get('token_id', '')
+            ntid = no_token.get('token_id', '')
+            if not ytid or not ntid:
+                cids = item.get('clobTokenIds')
+                if cids:
+                    try:
+                        ids = json.loads(cids) if isinstance(cids, str) else cids
+                        if len(ids) >= 2:
+                            if not ytid: ytid = ids[0]
+                            if not ntid: ntid = ids[1]
+                    except Exception:
+                        pass
             
             sub_markets.append(SubMarket(
                 condition_id=item.get('conditionId', item.get('id', '')),
                 question=title,
-                yes_token_id=yes_token.get('token_id', ''),
-                no_token_id=no_token.get('token_id', ''),
+                yes_token_id=ytid,
+                no_token_id=ntid,
                 yes_price=float(yes_token.get('price', 0.5)),
                 no_price=float(no_token.get('price', 0.5)),
-                group_item_title='Match Winner'
+                group_item_title='Match Winner',
+                outcome_yes=oe_yes,
+                outcome_no=oe_no
             ))
         
         # ── Sort sub-markets by category priority ──
@@ -1610,8 +1672,34 @@ class PolymarketClient:
         """Convert a market to an Event with a single sub-market."""
         question = item.get('question', '')
         tokens = item.get('tokens', [])
-        yes_token = next((t for t in tokens if t.get('outcome', '').lower() == 'yes'), {})
-        no_token = next((t for t in tokens if t.get('outcome', '').lower() == 'no'), {})
+        
+        # Handle both Yes/No and team-name outcomes
+        yes_token = next((t for t in tokens if t.get('outcome', '').lower() == 'yes'), None)
+        no_token = next((t for t in tokens if t.get('outcome', '').lower() == 'no'), None)
+        
+        outcome_yes, outcome_no = 'Yes', 'No'
+        if not yes_token and len(tokens) >= 1:
+            yes_token = tokens[0]
+            outcome_yes = tokens[0].get('outcome', 'Yes')
+        if not no_token and len(tokens) >= 2:
+            no_token = tokens[1]
+            outcome_no = tokens[1].get('outcome', 'No')
+        yes_token = yes_token or {}
+        no_token = no_token or {}
+        
+        # Get token IDs with clobTokenIds fallback
+        ytid = yes_token.get('token_id', '')
+        ntid = no_token.get('token_id', '')
+        if not ytid or not ntid:
+            clob_ids = item.get('clobTokenIds')
+            if clob_ids:
+                try:
+                    ids = json.loads(clob_ids) if isinstance(clob_ids, str) else clob_ids
+                    if len(ids) >= 2:
+                        if not ytid: ytid = ids[0]
+                        if not ntid: ntid = ids[1]
+                except Exception:
+                    pass
         
         # Try outcomePrices if prices are default
         yes_price = float(yes_token.get('price', 0.5))
@@ -1620,22 +1708,23 @@ class PolymarketClient:
         outcome_prices = item.get('outcomePrices')
         if outcome_prices and (yes_price == 0.5 or no_price == 0.5):
             try:
-                import json
                 prices = json.loads(outcome_prices) if isinstance(outcome_prices, str) else outcome_prices
                 if len(prices) >= 2:
                     yes_price = float(prices[0])
                     no_price = float(prices[1])
-            except:
+            except Exception:
                 pass
         
         sub_market = SubMarket(
             condition_id=item.get('conditionId', item.get('id', '')),
             question=question,
-            yes_token_id=yes_token.get('token_id', ''),
-            no_token_id=no_token.get('token_id', ''),
+            yes_token_id=ytid,
+            no_token_id=ntid,
             yes_price=yes_price,
             no_price=no_price,
-            group_item_title='Market'
+            group_item_title=item.get('groupItemTitle', 'Market'),
+            outcome_yes=outcome_yes,
+            outcome_no=outcome_no
         )
         
         return Event(
@@ -1759,12 +1848,18 @@ class PolymarketClient:
         """Search for markets by keyword.
         
         Enhanced: filters by enableOrderBook=true for tradable markets,
-        uses outcomePrices for accurate pricing.
+        uses outcomePrices for accurate pricing,
+        validates ALL query words appear in results to avoid irrelevant matches.
         """
+        # Stop words to ignore in keyword validation
+        STOP_WORDS = {'the', 'a', 'an', 'is', 'are', 'was', 'were', 'will', 'in', 'on',
+                       'at', 'to', 'for', 'of', 'and', 'or', 'vs', 'with', 'who', 'what',
+                       'when', 'how', 'be', 'by', 'from', 'it', 'this', 'that'}
+        
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 params = {
-                    "limit": limit * 3,  # fetch extra, filter locally
+                    "limit": limit * 5,  # fetch extra for keyword filtering
                     "active": active_only,
                     "closed": False,
                     "archived": False,
@@ -1780,6 +1875,22 @@ class PolymarketClient:
                 if resp.status_code == 200:
                     data = resp.json()
                     markets = self._parse_markets(data)
+                    
+                    # Keyword validation: ensure ALL significant query words appear in results
+                    query_words = [w.lower() for w in query.split() if w.lower() not in STOP_WORDS]
+                    if query_words:
+                        filtered = []
+                        for m in markets:
+                            text = f"{m.question} {m.description}".lower()
+                            if all(w in text for w in query_words):
+                                filtered.append(m)
+                        # If too aggressive (no results), fall back to requiring ANY word
+                        if not filtered:
+                            for m in markets:
+                                text = f"{m.question} {m.description}".lower()
+                                if any(w in text for w in query_words):
+                                    filtered.append(m)
+                        markets = filtered if filtered else markets
                     
                     # Try refreshing stale prices from CLOB midpoint
                     for m in markets:
@@ -1820,7 +1931,8 @@ class PolymarketClient:
         """Parse markets from API response.
         
         Enhanced: uses outcomePrices field when token prices are stale (0.5),
-        and filters out non-tradable markets (order book disabled, not accepting orders).
+        filters non-tradable markets, handles non-Yes/No outcomes (team names),
+        and uses clobTokenIds as fallback for token IDs.
         """
         markets = []
         
@@ -1837,18 +1949,39 @@ class PolymarketClient:
                     continue
                 
                 tokens = item.get('tokens', [])
-                yes_token = next((t for t in tokens if t.get('outcome', '').lower() == 'yes'), {})
-                no_token = next((t for t in tokens if t.get('outcome', '').lower() == 'no'), {})
-                
                 question = item.get('question', 'Unknown')
                 description = item.get('description', '')
+                
+                # Handle both Yes/No and team-name outcomes
+                yes_token = next((t for t in tokens if t.get('outcome', '').lower() == 'yes'), None)
+                no_token = next((t for t in tokens if t.get('outcome', '').lower() == 'no'), None)
+                
+                if not yes_token and len(tokens) >= 1:
+                    yes_token = tokens[0]
+                if not no_token and len(tokens) >= 2:
+                    no_token = tokens[1]
+                yes_token = yes_token or {}
+                no_token = no_token or {}
+                
+                # Get token IDs with clobTokenIds fallback
+                ytid = yes_token.get('token_id', '')
+                ntid = no_token.get('token_id', '')
+                if not ytid or not ntid:
+                    clob_ids = item.get('clobTokenIds')
+                    if clob_ids:
+                        try:
+                            ids = json.loads(clob_ids) if isinstance(clob_ids, str) else clob_ids
+                            if len(ids) >= 2:
+                                if not ytid: ytid = ids[0]
+                                if not ntid: ntid = ids[1]
+                        except Exception:
+                            pass
                 
                 # Get prices from tokens
                 yes_price = float(yes_token.get('price', 0.5))
                 no_price = float(no_token.get('price', 0.5))
                 
                 # If prices look stale (both default 0.5), try outcomePrices field
-                # outcomePrices is a JSON string "[0.73, 0.27]" with more current data
                 if yes_price == 0.5 and no_price == 0.5:
                     outcome_prices = item.get('outcomePrices')
                     if outcome_prices:
@@ -1860,18 +1993,24 @@ class PolymarketClient:
                         except Exception:
                             pass
                 
+                # Get actual outcome labels
+                oe_yes = yes_token.get('outcome', 'Yes') if yes_token else 'Yes'
+                oe_no = no_token.get('outcome', 'No') if no_token else 'No'
+                
                 markets.append(Market(
                     condition_id=item.get('conditionId', item.get('id', '')),
                     question=question,
                     description=description,
-                    yes_token_id=yes_token.get('token_id', ''),
-                    no_token_id=no_token.get('token_id', ''),
+                    yes_token_id=ytid,
+                    no_token_id=ntid,
                     yes_price=yes_price,
                     no_price=no_price,
                     volume=float(item.get('volume', 0)),
                     category=item.get('category', 'Other'),
                     sport=detect_sport(f"{question} {description}"),
-                    end_date=item.get('endDate')
+                    end_date=item.get('endDate'),
+                    outcome_yes=oe_yes,
+                    outcome_no=oe_no
                 ))
             except Exception as e:
                 print(f"⚠️ Market parse error: {e}")

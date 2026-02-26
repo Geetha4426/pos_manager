@@ -239,7 +239,7 @@ def sub_markets_keyboard(sub_markets: List[Any], event_idx: int) -> InlineKeyboa
     """
     Sub-markets within an event.
     Shows options like: Match Winner, Toss Winner, Top Scorer, Over/Under
-    Grouped by category (finals first, then matches, player props, etc.)
+    Also shows outcome names (e.g., India 65% / Pakistan 35%)
     """
     buttons = []
     
@@ -253,7 +253,7 @@ def sub_markets_keyboard(sub_markets: List[Any], event_idx: int) -> InlineKeyboa
         'other': '📊',
     }
     
-    for idx, sub in enumerate(sub_markets[:8]):  # Max 8 sub-markets
+    for idx, sub in enumerate(sub_markets[:10]):  # Max 10 sub-markets
         # Categorize
         try:
             from core.polymarket_client import categorize_sub_market
@@ -264,26 +264,40 @@ def sub_markets_keyboard(sub_markets: List[Any], event_idx: int) -> InlineKeyboa
         
         # Get a short label
         if sub.group_item_title:
-            label = sub.group_item_title[:32]
+            label = sub.group_item_title[:30]
         else:
-            label = sub.question[:32] if len(sub.question) > 32 else sub.question
+            label = sub.question[:30] if len(sub.question) > 30 else sub.question
         
-        # Show price indicator
+        # Show outcome names and prices for team-based markets
+        oe_yes = getattr(sub, 'outcome_yes', 'Yes')
+        oe_no = getattr(sub, 'outcome_no', 'No')
         yes_pct = int(sub.yes_price * 100)
-        label = f"{emoji} {label} ({yes_pct}%)"
+        no_pct = int(sub.no_price * 100)
         
-        buttons.append([InlineKeyboardButton(label, callback_data=f"sub_{event_idx}_{idx}")])
+        if oe_yes != 'Yes' and oe_no != 'No':
+            # Team-based market: show both teams with odds
+            label = f"{emoji} {label}"
+            buttons.append([InlineKeyboardButton(label, callback_data=f"sub_{event_idx}_{idx}")])
+            # Add small odds line
+            odds_label = f"   {oe_yes} {yes_pct}% | {oe_no} {no_pct}%"
+            buttons.append([InlineKeyboardButton(odds_label, callback_data=f"sub_{event_idx}_{idx}")])
+        else:
+            label = f"{emoji} {label} ({yes_pct}%)"
+            buttons.append([InlineKeyboardButton(label, callback_data=f"sub_{event_idx}_{idx}")])
     
     buttons.append([InlineKeyboardButton("🔙 Events", callback_data="back_events")])
     return InlineKeyboardMarkup(buttons)
 
 
-def outcome_keyboard() -> InlineKeyboardMarkup:
-    """Yes/No outcome selection."""
+def outcome_keyboard(outcome_yes: str = "Yes", outcome_no: str = "No") -> InlineKeyboardMarkup:
+    """Outcome selection - shows actual team names or Yes/No."""
+    yes_emoji = "✅" if outcome_yes == "Yes" else "🔵"
+    no_emoji = "❌" if outcome_no == "No" else "🔴"
+    
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("✅ YES", callback_data="out_yes"),
-            InlineKeyboardButton("❌ NO", callback_data="out_no")
+            InlineKeyboardButton(f"{yes_emoji} {outcome_yes}", callback_data="out_yes"),
+            InlineKeyboardButton(f"{no_emoji} {outcome_no}", callback_data="out_no")
         ],
         [InlineKeyboardButton("⭐ Add Favorite", callback_data="fav_add")],
         [InlineKeyboardButton("🔙 Back", callback_data="back_sub")]

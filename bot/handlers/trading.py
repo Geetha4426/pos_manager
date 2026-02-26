@@ -331,9 +331,25 @@ async def sub_market_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data['selected_sub_market'] = sub
     context.user_data['selected_market'] = sub  # Legacy compatibility
     
+    # Get actual outcome labels (team names or Yes/No)
+    oe_yes = getattr(sub, 'outcome_yes', 'Yes')
+    oe_no = getattr(sub, 'outcome_no', 'No')
+    
     # Calculate implied probabilities
     yes_prob = sub.yes_price * 100
     no_prob = sub.no_price * 100
+    
+    # Use team names or Yes/No in display
+    if oe_yes != 'Yes' and oe_no != 'No':
+        price_text = (
+            f"   🔵 {oe_yes}: {yes_prob:.0f}¢ (${sub.yes_price:.2f})\n"
+            f"   🔴 {oe_no}: {no_prob:.0f}¢ (${sub.no_price:.2f})"
+        )
+    else:
+        price_text = (
+            f"   ✅ YES: {yes_prob:.0f}¢ (${sub.yes_price:.2f})\n"
+            f"   ❌ NO: {no_prob:.0f}¢ (${sub.no_price:.2f})"
+        )
     
     text = f"""
 📊 <b>Market Details</b>
@@ -342,8 +358,7 @@ async def sub_market_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 🎯 <b>{sub.group_item_title or sub.question}</b>
 
 💹 <b>Prices:</b>
-   ✅ YES: {yes_prob:.0f}¢ (${sub.yes_price:.2f})
-   ❌ NO: {no_prob:.0f}¢ (${sub.no_price:.2f})
+{price_text}
 
 <b>Select your position:</b>
 """
@@ -351,7 +366,7 @@ async def sub_market_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.edit_message_text(
         text,
         parse_mode='HTML',
-        reply_markup=outcome_keyboard()
+        reply_markup=outcome_keyboard(outcome_yes=oe_yes, outcome_no=oe_no)
     )
 
 
@@ -407,20 +422,26 @@ async def outcome_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    outcome = query.data.split('_')[1].upper()  # out_yes -> YES
+    outcome_key = query.data.split('_')[1].upper()  # out_yes -> YES
     
     sub = context.user_data.get('selected_sub_market')
     if not sub:
         await query.edit_message_text("⚠️ Market not found. Start over with /buy")
         return
     
+    # Get actual outcome labels
+    oe_yes = getattr(sub, 'outcome_yes', 'Yes')
+    oe_no = getattr(sub, 'outcome_no', 'No')
+    
     # Get the correct token and price
-    if outcome == 'YES':
+    if outcome_key == 'YES':
         token_id = sub.yes_token_id
         price = sub.yes_price
+        outcome_label = oe_yes  # e.g., "India" or "Yes"
     else:
         token_id = sub.no_token_id
         price = sub.no_price
+        outcome_label = oe_no  # e.g., "Pakistan" or "No"
     
     if not token_id:
         await query.edit_message_text("⚠️ Token data unavailable for this market. Try another market.")
@@ -436,7 +457,7 @@ async def outcome_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass  # Keep Gamma price as fallback
     
     context.user_data['selected_token_id'] = token_id
-    context.user_data['selected_outcome'] = outcome
+    context.user_data['selected_outcome'] = outcome_label  # Store actual label
     context.user_data['selected_price'] = price
     
     event = context.user_data.get('selected_event')
@@ -447,7 +468,7 @@ async def outcome_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 📋 {event_title}
 🎯 <b>{sub.group_item_title or sub.question}</b>
-📍 <b>Buying:</b> {outcome} @ ${price:.2f}
+📍 <b>Buying:</b> {outcome_label} @ ${price:.2f}
 
 <b>Select amount (USD):</b>
 """
@@ -471,10 +492,23 @@ async def back_out_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await buy_command(update, context)
         return
     
+    oe_yes = getattr(sub, 'outcome_yes', 'Yes')
+    oe_no = getattr(sub, 'outcome_no', 'No')
     yes_prob = sub.yes_price * 100
     no_prob = sub.no_price * 100
     
     event_title = event.title if event else sub.question
+    
+    if oe_yes != 'Yes' and oe_no != 'No':
+        price_text = (
+            f"   🔵 {oe_yes}: {yes_prob:.0f}¢\n"
+            f"   🔴 {oe_no}: {no_prob:.0f}¢"
+        )
+    else:
+        price_text = (
+            f"   ✅ YES: {yes_prob:.0f}¢\n"
+            f"   ❌ NO: {no_prob:.0f}¢"
+        )
     
     text = f"""
 📊 <b>Market Details</b>
@@ -483,8 +517,7 @@ async def back_out_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🎯 <b>{sub.group_item_title or sub.question}</b>
 
 💹 <b>Prices:</b>
-   ✅ YES: {yes_prob:.0f}¢
-   ❌ NO: {no_prob:.0f}¢
+{price_text}
 
 <b>Select your position:</b>
 """
@@ -492,7 +525,7 @@ async def back_out_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         text,
         parse_mode='HTML',
-        reply_markup=outcome_keyboard()
+        reply_markup=outcome_keyboard(outcome_yes=oe_yes, outcome_no=oe_no)
     )
 
 
@@ -652,6 +685,10 @@ async def market_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     market = markets[idx]
     
+    # Get actual outcome labels
+    oe_yes = getattr(market, 'outcome_yes', 'Yes')
+    oe_no = getattr(market, 'outcome_no', 'No')
+    
     # Convert to sub-market for compatibility
     from core.polymarket_client import SubMarket
     sub = SubMarket(
@@ -661,7 +698,9 @@ async def market_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         no_token_id=market.no_token_id,
         yes_price=market.yes_price,
         no_price=market.no_price,
-        group_item_title=''
+        group_item_title='',
+        outcome_yes=oe_yes,
+        outcome_no=oe_no
     )
     
     context.user_data['selected_sub_market'] = sub
@@ -671,14 +710,24 @@ async def market_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     yes_prob = market.yes_price * 100
     no_prob = market.no_price * 100
     
+    if oe_yes != 'Yes' and oe_no != 'No':
+        price_text = (
+            f"   🔵 {oe_yes}: {yes_prob:.0f}¢ (${market.yes_price:.2f})\n"
+            f"   🔴 {oe_no}: {no_prob:.0f}¢ (${market.no_price:.2f})"
+        )
+    else:
+        price_text = (
+            f"   ✅ YES: {yes_prob:.0f}¢ (${market.yes_price:.2f})\n"
+            f"   ❌ NO: {no_prob:.0f}¢ (${market.no_price:.2f})"
+        )
+    
     text = f"""
 📊 <b>Market Details</b>
 
 📋 <b>{market.question}</b>
 
 💹 <b>Prices:</b>
-   ✅ YES: {yes_prob:.0f}¢ (${market.yes_price:.2f})
-   ❌ NO: {no_prob:.0f}¢ (${market.no_price:.2f})
+{price_text}
 
 📈 <b>Volume:</b> ${market.volume:,.0f}
 
@@ -688,7 +737,7 @@ async def market_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(
         text,
         parse_mode='HTML',
-        reply_markup=outcome_keyboard()
+        reply_markup=outcome_keyboard(outcome_yes=oe_yes, outcome_no=oe_no)
     )
 
 

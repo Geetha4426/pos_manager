@@ -56,9 +56,17 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = f"🔍 <b>Results for '{query}'</b>\n\n"
     
     for i, market in enumerate(markets[:8], 1):
-        yes_price = market.yes_price * 100
-        text += f"{i}. {market.question[:45]}...\n"
-        text += f"   ✅ YES: {yes_price:.0f}¢ | 📊 Vol: ${market.volume:,.0f}\n\n"
+        oe_yes = getattr(market, 'outcome_yes', 'Yes')
+        oe_no = getattr(market, 'outcome_no', 'No')
+        if oe_yes != 'Yes' and oe_no != 'No':
+            yes_pct = int(market.yes_price * 100)
+            no_pct = int(market.no_price * 100)
+            text += f"{i}. {market.question[:45]}...\n"
+            text += f"   🔵 {oe_yes}: {yes_pct}¢ | 🔴 {oe_no}: {no_pct}¢\n\n"
+        else:
+            yes_price = market.yes_price * 100
+            text += f"{i}. {market.question[:45]}...\n"
+            text += f"   ✅ YES: {yes_price:.0f}¢ | 📊 Vol: ${market.volume:,.0f}\n\n"
     
     await update.message.reply_text(
         text,
@@ -115,9 +123,17 @@ async def search_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = f"🔍 <b>Results for '{query}'</b>\n\n"
     
     for i, market in enumerate(markets[:8], 1):
-        yes_price = market.yes_price * 100
-        text += f"{i}. {market.question[:45]}...\n"
-        text += f"   ✅ YES: {yes_price:.0f}¢ | 📊 Vol: ${market.volume:,.0f}\n\n"
+        oe_yes = getattr(market, 'outcome_yes', 'Yes')
+        oe_no = getattr(market, 'outcome_no', 'No')
+        if oe_yes != 'Yes' and oe_no != 'No':
+            yes_pct = int(market.yes_price * 100)
+            no_pct = int(market.no_price * 100)
+            text += f"{i}. {market.question[:45]}...\n"
+            text += f"   🔵 {oe_yes}: {yes_pct}¢ | 🔴 {oe_no}: {no_pct}¢\n\n"
+        else:
+            yes_price = market.yes_price * 100
+            text += f"{i}. {market.question[:45]}...\n"
+            text += f"   ✅ YES: {yes_price:.0f}¢ | 📊 Vol: ${market.volume:,.0f}\n\n"
     
     await update.message.reply_text(
         text,
@@ -151,8 +167,23 @@ async def info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     market = markets[0]
     context.user_data['selected_market'] = market
     
+    # Get actual outcome labels
+    oe_yes = getattr(market, 'outcome_yes', 'Yes')
+    oe_no = getattr(market, 'outcome_no', 'No')
+    
     yes_prob = market.yes_price * 100
     no_prob = market.no_price * 100
+    
+    if oe_yes != 'Yes' and oe_no != 'No':
+        price_text = (
+            f"   🔵 {oe_yes}: {yes_prob:.0f}¢\n"
+            f"   🔴 {oe_no}: {no_prob:.0f}¢"
+        )
+    else:
+        price_text = (
+            f"   ✅ YES: {yes_prob:.0f}¢\n"
+            f"   ❌ NO: {no_prob:.0f}¢"
+        )
     
     text = f"""
 📊 <b>Market Details</b>
@@ -160,8 +191,7 @@ async def info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📋 <b>{market.question}</b>
 
 💹 <b>Prices:</b>
-   ✅ YES: {yes_prob:.0f}¢
-   ❌ NO: {no_prob:.0f}¢
+{price_text}
 
 📈 <b>Volume:</b> ${market.volume:,.0f}
 🏷️ <b>Category:</b> {market.category}
@@ -172,7 +202,7 @@ async def info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         text,
         parse_mode='HTML',
-        reply_markup=outcome_keyboard()
+        reply_markup=outcome_keyboard(outcome_yes=oe_yes, outcome_no=oe_no)
     )
 
 
