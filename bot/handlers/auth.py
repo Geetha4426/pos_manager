@@ -172,9 +172,11 @@ async def receive_funder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     
     funder = ''
+    sig_type = 0  # Default: EOA
     if text.lower() not in ('/skip', 'skip', '-', 'none', 'no'):
         if text.startswith('0x') and len(text) == 42:
             funder = text
+            sig_type = 1  # Has funder address → proxy wallet
         else:
             await update.message.reply_text(
                 "❌ Invalid address format. Must be 0x... (42 characters).\n\n"
@@ -201,7 +203,7 @@ async def receive_funder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         private_key=key,
         password=password,
         funder_address=funder,
-        signature_type=1,  # Default: Magic/Email proxy
+        signature_type=sig_type,  # 0=EOA (no funder), 1=Proxy (has funder)
         display_name=display_name
     )
 
@@ -210,10 +212,12 @@ async def receive_funder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     password = None
 
     if success:
+        sig_label = "EOA (direct wallet)" if sig_type == 0 else "Proxy (Magic/email)"
         await update.message.reply_text(
             f"✅ <b>Wallet Connected!</b>\n\n"
             f"🔐 Key encrypted with AES-256-GCM\n"
-            f"🏦 Funder: {funder[:8]}...{funder[-4:] if funder else 'default (EOA)'}\n\n"
+            f"🏦 Funder: {funder[:8]}...{funder[-4:] if funder else 'default (EOA)'}\n"
+            f"📝 Signature type: {sig_type} ({sig_label})\n\n"
             f"Use /unlock to start trading.\n"
             f"Use /disconnect to remove your wallet.",
             parse_mode='HTML'

@@ -89,12 +89,34 @@ async def debug_wallet_command(update: Update, context: ContextTypes.DEFAULT_TYP
     # Signer (EOA) address from ClobClient
     signer = "(unknown)"
     actual_funder = "(unknown)"
+    actual_sig_type = sig_type
     if client and client.clob_client:
         try:
             signer = client.clob_client.get_address()
         except Exception:
             pass
         actual_funder = getattr(client, '_funder_address', funder_display)
+        # Get actual sig_type from the ClobClient (may differ from env var)
+        actual_sig_type = getattr(client.clob_client, 'sig_type',
+                         getattr(client.clob_client, 'signature_type', sig_type))
+    
+    # Also check per-user session sig_type
+    per_user_sig = "(no session)"
+    per_user_funder = "(no session)"
+    try:
+        from core.user_manager import get_user_manager
+        um = get_user_manager()
+        user_id = update.effective_user.id
+        session = um.get_session(user_id)
+        if session:
+            per_user_sig = session.signature_type
+            per_user_funder = session.funder_address or "(empty)"
+            # Also get from the session's ClobClient
+            if session.clob_client:
+                per_user_sig = getattr(session.clob_client, 'sig_type',
+                              getattr(session.clob_client, 'signature_type', per_user_sig))
+    except Exception:
+        pass
     
     # Relay config
     relay = Config.CLOB_RELAY_URL or "NOT SET (direct)"
@@ -112,8 +134,12 @@ async def debug_wallet_command(update: Update, context: ContextTypes.DEFAULT_TYP
 <b>Funder (Proxy):</b> <code>{actual_funder}</code>
 <b>Private Key:</b> <code>{pk_display}</code>
 
-<b>Signature Type:</b> {sig_type} ({sig_label})
+<b>Env SIGNATURE_TYPE:</b> {sig_type} ({sig_label})
 <b>Chain ID:</b> {Config.POLYGON_CHAIN_ID}
+
+<b>Per-User Session:</b>
+  sig_type: <b>{per_user_sig}</b> (this is used for trades!)
+  funder: <code>{per_user_funder}</code>
 
 <b>CLOB URL:</b> {Config.get_clob_url()}
 <b>Relay:</b> {relay}
@@ -123,15 +149,17 @@ async def debug_wallet_command(update: Update, context: ContextTypes.DEFAULT_TYP
 <b>Troubleshooting "invalid signature":</b>
 
 • If you created your Polymarket account via <b>email/browser</b>:
-  → SIGNATURE_TYPE should be <b>1</b>
+  → sig_type should be <b>1</b>
   → FUNDER_ADDRESS must be your <b>proxy wallet</b> address
   (Find it on polygonscan: the contract that holds your USDC)
 
 • If you use a <b>direct EOA wallet</b> (MetaMask export):
-  → SIGNATURE_TYPE should be <b>0</b>
+  → sig_type should be <b>0</b>
   → FUNDER_ADDRESS can be empty
 
-• FUNDER_ADDRESS ≠ Signer address for proxy wallets
+• To fix: /disconnect → /connect again with correct settings
+• The env var SIGNATURE_TYPE is for the global client (browse only)
+• Your per-user sig_type (from /connect) is what matters for trades
 """
     
     if update.callback_query:

@@ -2130,6 +2130,17 @@ class PolymarketClient:
         if self.is_paper or not self.clob_client:
             return await self._paper_buy(token_id, amount_usd, market_info)
         
+        # Get actual sig type from ClobClient (may differ from env var)
+        actual_sig_type = getattr(self.clob_client, 'sig_type', 
+                         getattr(self.clob_client, 'signature_type', '?'))
+        actual_funder = getattr(self, '_funder_address', Config.FUNDER_ADDRESS or '(default)')
+        
+        # Refresh API creds before buy to prevent stale-creds signature errors
+        try:
+            self.clob_client.set_api_creds(self.clob_client.create_or_derive_api_creds())
+        except Exception as e:
+            print(f"\u26a0\ufe0f Pre-buy creds refresh failed: {e}")
+        
         last_error = ""
         
         # ═══════════════════════════════════════════════════
@@ -2181,7 +2192,8 @@ class PolymarketClient:
                 last_error = str(e)
                 print(f"⚠️ FAK buy attempt {attempt+1} error: {e}")
                 if 'invalid signature' in str(e).lower():
-                    print(f"   💡 Check SIGNATURE_TYPE={Config.SIGNATURE_TYPE} and FUNDER_ADDRESS={Config.FUNDER_ADDRESS[:10]}..." if Config.FUNDER_ADDRESS else f"   💡 Check SIGNATURE_TYPE={Config.SIGNATURE_TYPE} — FUNDER_ADDRESS is NOT SET")
+                    print(f"   💡 ClobClient sig_type={actual_sig_type}, funder={str(actual_funder)[:16]}...")
+                    print(f"   💡 If sell works but buy doesn't, try /connect again with correct wallet type")
             
             # Brief pause before retry
             if attempt == 0:
@@ -2219,9 +2231,8 @@ class PolymarketClient:
         except Exception as e:
             print(f"⚠️ GTC buy fallback error: {e}")
             if 'invalid signature' in str(e).lower():
-                print(f"   💡 Signature issue — check your wallet config:")
-                print(f"   SIGNATURE_TYPE={Config.SIGNATURE_TYPE} (0=EOA, 1=Proxy/Magic, 2=Proxy)")
-                print(f"   FUNDER_ADDRESS={'set: '+Config.FUNDER_ADDRESS[:10]+'...' if Config.FUNDER_ADDRESS else 'NOT SET (required for proxy wallets)'}")
+                print(f"   💡 ClobClient sig_type={actual_sig_type}, funder={str(actual_funder)[:16]}...")
+                print(f"   💡 Try: /connect again and ensure correct wallet type")
             last_error = str(e)
         
         return OrderResult(success=False, error=str(last_error))
