@@ -2389,7 +2389,7 @@ class PolymarketClient:
                     params = BookParams(token_id=token_id)
                     book = self.clob_client.get_order_book(params)
                 
-                # Parse response
+                # Parse response — handle both dict and OrderSummary/object responses
                 bids = []
                 asks = []
                 
@@ -2397,18 +2397,38 @@ class PolymarketClient:
                     raw_bids = book.get('bids', [])
                     raw_asks = book.get('asks', [])
                 else:
-                    raw_bids = getattr(book, 'bids', [])
-                    raw_asks = getattr(book, 'asks', [])
+                    raw_bids = getattr(book, 'bids', []) or []
+                    raw_asks = getattr(book, 'asks', []) or []
                 
                 for bid in raw_bids[:depth]:
-                    price = bid.get('price', bid[0]) if isinstance(bid, dict) else bid[0]
-                    size = bid.get('size', bid[1]) if isinstance(bid, dict) else bid[1]
-                    bids.append({'price': float(price), 'size': float(size)})
+                    if isinstance(bid, dict):
+                        price = float(bid.get('price', 0))
+                        size = float(bid.get('size', 0))
+                    elif hasattr(bid, 'price'):
+                        price = float(bid.price)
+                        size = float(getattr(bid, 'size', 0))
+                    else:
+                        try:
+                            price = float(bid[0])
+                            size = float(bid[1])
+                        except (IndexError, TypeError):
+                            continue
+                    bids.append({'price': price, 'size': size})
                 
                 for ask in raw_asks[:depth]:
-                    price = ask.get('price', ask[0]) if isinstance(ask, dict) else ask[0]
-                    size = ask.get('size', ask[1]) if isinstance(ask, dict) else ask[1]
-                    asks.append({'price': float(price), 'size': float(size)})
+                    if isinstance(ask, dict):
+                        price = float(ask.get('price', 0))
+                        size = float(ask.get('size', 0))
+                    elif hasattr(ask, 'price'):
+                        price = float(ask.price)
+                        size = float(getattr(ask, 'size', 0))
+                    else:
+                        try:
+                            price = float(ask[0])
+                            size = float(ask[1])
+                        except (IndexError, TypeError):
+                            continue
+                    asks.append({'price': price, 'size': size})
                 
                 return {
                     'bids': sorted(bids, key=lambda x: x['price'], reverse=True),
