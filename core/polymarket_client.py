@@ -391,7 +391,12 @@ class PolymarketClient:
             print(f"📝 Paper trading mode")
     
     def _init_live_client(self):
-        """Initialize live trading client."""
+        """Initialize live trading client.
+        
+        If CLOB_RELAY_URL is set, routes all CLOB API calls through the relay
+        to bypass geo-blocking. Orders are signed locally (private key never
+        leaves your machine), only the signed request is forwarded.
+        """
         import time as _time
         try:
             t0 = _time.time()
@@ -402,13 +407,23 @@ class PolymarketClient:
             if not funder or funder == 'your_funder_address_here':
                 funder = None  # Let ClobClient default to signer address
             
+            # Use relay URL if configured (bypasses geo-blocking)
+            clob_url = Config.get_clob_url()
+            if Config.is_relay_enabled():
+                print(f"   🔀 Using CLOB relay: {clob_url}")
+            
             self.clob_client = ClobClient(
-                Config.POLYMARKET_CLOB_URL,
+                clob_url,
                 key=Config.POLYGON_PRIVATE_KEY,
                 chain_id=Config.POLYGON_CHAIN_ID,
                 signature_type=Config.SIGNATURE_TYPE,
                 funder=funder
             )
+            
+            # If relay has auth token, patch the session to include it
+            if Config.is_relay_enabled() and Config.CLOB_RELAY_AUTH_TOKEN:
+                self._patch_clob_session_auth()
+            
             print(f"   ↳ ClobClient created ({_time.time()-t0:.1f}s)")
             
             t1 = _time.time()
@@ -419,12 +434,39 @@ class PolymarketClient:
             actual_funder = funder or self.clob_client.get_address()
             self._funder_address = actual_funder
             print(f"   ↳ Funder (proxy wallet): {actual_funder}")
-            print(f"✅ Live Polymarket client initialized ({_time.time()-t0:.1f}s total)")
+            via = " via relay" if Config.is_relay_enabled() else ""
+            print(f"✅ Live Polymarket client initialized{via} ({_time.time()-t0:.1f}s total)")
         except Exception as e:
             print(f"⚠️ Failed to init live client: {e}")
             if is_geo_block_error(str(e)):
                 print(GEO_BLOCK_MSG)
+                if not Config.is_relay_enabled():
+                    print("\n💡 TIP: Set CLOB_RELAY_URL to bypass geo-blocking.")
+                    print("   See relay/ folder for Cloudflare Worker setup.\n")
             self.clob_client = None
+    
+    def _patch_clob_session_auth(self):
+        """Inject relay auth token into the ClobClient's HTTP session.
+        
+        The py-clob-client uses a requests.Session internally.
+        We add an Authorization header so the relay can verify requests.
+        """
+        try:
+            # py-clob-client stores session in self.clob_client.session or similar
+            session = getattr(self.clob_client, 'session', None)
+            if session is None:
+                # Try accessing through the http helper
+                http = getattr(self.clob_client, 'http', None)
+                if http:
+                    session = getattr(http, 'session', None)
+            
+            if session and hasattr(session, 'headers'):
+                session.headers['Authorization'] = f'Bearer {Config.CLOB_RELAY_AUTH_TOKEN}'
+                print(f"   ↳ Relay auth token injected")
+            else:
+                print(f"   ⚠️ Could not inject relay auth token (session not found)")
+        except Exception as e:
+            print(f"   ⚠️ Relay auth injection failed: {e}")
     
     async def _fetch_with_retry(
         self, 
@@ -673,7 +715,15 @@ class PolymarketClient:
             # HTTP 451 is always geo-block
             if '451' in err_msg or is_geo_block_error(err_msg):
                 print(f"🚫 GEO-BLOCKED: {e}")
-                raise Exception(GEO_BLOCK_MSG)
+                if Config.is_relay_enabled():
+                    raise Exception(
+                        "🚫 Geo-blocked even through relay.\n"
+                        "Your relay server may also be in a blocked region.\n"
+                        "Check your Cloudflare Worker deployment region."
+                    )
+                raise Exception(
+                    GEO_BLOCK_MSG + "\n\n💡 Set CLOB_RELAY_URL to bypass. See relay/ folder."
+                )
             
             # Auth/session/forbidden errors -> refresh creds and retry once
             if any(kw in err_lower for kw in ('expired', 'unauthorized', 'auth', '401', 'forbidden', '403')):
@@ -1693,10 +1743,11 @@ class PolymarketClient:
             # Calculate max acceptable price with slippage
             max_price = min(current_price * (1 + slippage / 100), 0.99)
             
-            # MarketOrderArgs only takes token_id and amount
+            # MarketOrderArgs requires token_id, amount, and side
             order = MarketOrderArgs(
                 token_id=token_id,
-                amount=amount_usd
+                amount=amount_usd,
+                side=BUY
             )
             
             # Use the correct method signature - create order then post with FOK
@@ -2114,7 +2165,8 @@ class PolymarketClient:
                 try:
                     order = MarketOrderArgs(
                         token_id=token_id,
-                        amount=shares
+                        amount=shares,
+                        side=SELL
                     )
                     signed = self.clob_client.create_market_order(order)
                     resp = self.clob_client.post_order(signed, OrderType.FOK)
@@ -2294,18 +2346,26 @@ class PolymarketClient:
             await self._load_paper_positions()
         elif self.clob_client:
             # Quick connectivity check: hit CLOB /time (no auth needed, fast)
+            clob_url = Config.get_clob_url()
+            relay = " (via relay)" if Config.is_relay_enabled() else ""
             try:
+                headers = {}
+                if Config.is_relay_enabled() and Config.CLOB_RELAY_AUTH_TOKEN:
+                    headers['Authorization'] = f'Bearer {Config.CLOB_RELAY_AUTH_TOKEN}'
+                
                 async with httpx.AsyncClient(timeout=10) as client:
-                    resp = await client.get(f"{Config.POLYMARKET_CLOB_URL}/time")
+                    resp = await client.get(f"{clob_url}/time", headers=headers)
                     if resp.status_code == 451:
-                        print(f"🚫 Warning: CLOB /time returned 451 (geo-blocked)")
+                        print(f"🚫 Warning: CLOB /time returned 451 (geo-blocked){relay}")
                         print(GEO_BLOCK_MSG)
+                        if not Config.is_relay_enabled():
+                            print("\n💡 TIP: Set CLOB_RELAY_URL to bypass. See relay/ folder.\n")
                     elif resp.status_code == 403:
-                        print(f"⚠️ CLOB /time returned 403 (may be auth issue, not blocking)")
+                        print(f"⚠️ CLOB /time returned 403 (may be auth issue, not blocking){relay}")
                     else:
-                        print(f"🌍 CLOB connectivity OK (/time = {resp.status_code})")
+                        print(f"🌍 CLOB connectivity OK (/time = {resp.status_code}){relay}")
             except Exception as e:
-                print(f"⚠️ CLOB connectivity check failed: {e}")
+                print(f"⚠️ CLOB connectivity check failed{relay}: {e}")
 
 
 # Singleton instance

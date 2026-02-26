@@ -34,6 +34,16 @@ class Config:
     POLYGON_CHAIN_ID = int(os.getenv('POLYGON_CHAIN_ID', '137'))
     
     # ═══════════════════════════════════════════════════════════════════
+    # CLOB RELAY (Geo-block bypass)
+    # Set this to your Cloudflare Worker or VPS relay URL.
+    # When set, ALL CLOB API calls (buy/sell/orders) route through the relay.
+    # The relay forwards requests to clob.polymarket.com from an allowed region.
+    # Example: https://poly-relay.yourname.workers.dev
+    # ═══════════════════════════════════════════════════════════════════
+    CLOB_RELAY_URL = os.getenv('CLOB_RELAY_URL', '')
+    CLOB_RELAY_AUTH_TOKEN = os.getenv('CLOB_RELAY_AUTH_TOKEN', '')  # Optional auth for relay
+    
+    # ═══════════════════════════════════════════════════════════════════
     # TRADING SETTINGS
     # ═══════════════════════════════════════════════════════════════════
     TRADING_MODE = os.getenv('TRADING_MODE', 'paper')  # 'paper' or 'live'
@@ -111,6 +121,16 @@ class Config:
         return cls.SPORT_EMOJIS.get(sport.lower(), '🎯')
     
     @classmethod
+    def get_clob_url(cls) -> str:
+        """Get the effective CLOB API URL (relay if configured, else direct)."""
+        return cls.CLOB_RELAY_URL.rstrip('/') if cls.CLOB_RELAY_URL else cls.POLYMARKET_CLOB_URL
+    
+    @classmethod
+    def is_relay_enabled(cls) -> bool:
+        """Check if CLOB relay is configured."""
+        return bool(cls.CLOB_RELAY_URL)
+    
+    @classmethod
     def print_status(cls):
         """Print configuration status."""
         print("\n" + "=" * 50)
@@ -122,5 +142,6 @@ class Config:
         print(f"📱 Telegram: {'✅' if cls.TELEGRAM_BOT_TOKEN else '❌'}")
         print(f"🔐 Wallet: {'✅' if cls.POLYGON_PRIVATE_KEY else '❌'}")
         print(f"💳 Funder: {'✅' if cls.FUNDER_ADDRESS else '❌'}")
+        print(f"🔀 CLOB Relay: {'✅ ' + cls.CLOB_RELAY_URL if cls.CLOB_RELAY_URL else '❌ Direct (may be geo-blocked)'}")
         print(f"🎯 Sports: {', '.join(cls.SPORTS_PRIORITY)}")
         print("=" * 50 + "\n")
