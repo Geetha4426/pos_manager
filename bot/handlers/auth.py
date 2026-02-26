@@ -176,7 +176,7 @@ async def receive_funder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text.lower() not in ('/skip', 'skip', '-', 'none', 'no'):
         if text.startswith('0x') and len(text) == 42:
             funder = text
-            sig_type = 1  # Has funder address → proxy wallet
+            sig_type = 2  # Polymarket proxy wallet = GnosisSafe (sig_type=2)
         else:
             await update.message.reply_text(
                 "❌ Invalid address format. Must be 0x... (42 characters).\n\n"
@@ -203,7 +203,7 @@ async def receive_funder(update: Update, context: ContextTypes.DEFAULT_TYPE):
         private_key=key,
         password=password,
         funder_address=funder,
-        signature_type=sig_type,  # 0=EOA (no funder), 1=Proxy (has funder)
+        signature_type=sig_type,  # 0=EOA (no funder), 2=GnosisSafe (proxy wallet)
         display_name=display_name
     )
 
@@ -212,7 +212,7 @@ async def receive_funder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     password = None
 
     if success:
-        sig_label = "EOA (direct wallet)" if sig_type == 0 else "Proxy (Magic/email)"
+        sig_label = "EOA (direct wallet)" if sig_type == 0 else "GnosisSafe (proxy wallet)"
         await update.message.reply_text(
             f"✅ <b>Wallet Connected!</b>\n\n"
             f"🔐 Key encrypted with AES-256-GCM\n"

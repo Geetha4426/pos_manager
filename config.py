@@ -24,7 +24,7 @@ class Config:
     # ═══════════════════════════════════════════════════════════════════
     POLYGON_PRIVATE_KEY = os.getenv('POLYGON_PRIVATE_KEY', '')
     FUNDER_ADDRESS = os.getenv('FUNDER_ADDRESS', '')
-    SIGNATURE_TYPE = int(os.getenv('SIGNATURE_TYPE', '1'))  # 0=EOA, 1=Magic/Email, 2=Proxy
+    SIGNATURE_TYPE = int(os.getenv('SIGNATURE_TYPE', '2'))  # 0=EOA, 1=PolyProxy, 2=GnosisSafe (browser wallet)
     
     # ═══════════════════════════════════════════════════════════════════
     # API ENDPOINTS

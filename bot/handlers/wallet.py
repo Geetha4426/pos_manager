@@ -84,7 +84,7 @@ async def debug_wallet_command(update: Update, context: ContextTypes.DEFAULT_TYP
     
     # Signature type
     sig_type = Config.SIGNATURE_TYPE
-    sig_label = {0: "EOA (direct wallet)", 1: "Proxy/Magic (email login)", 2: "Proxy"}.get(sig_type, f"Unknown ({sig_type})")
+    sig_label = {0: "EOA (direct wallet)", 1: "Poly Proxy", 2: "GnosisSafe (proxy wallet)"}.get(sig_type, f"Unknown ({sig_type})")
     
     # Signer (EOA) address from ClobClient
     signer = "(unknown)"
@@ -145,7 +145,7 @@ async def debug_wallet_command(update: Update, context: ContextTypes.DEFAULT_TYP
 <b>Chain ID:</b> {Config.POLYGON_CHAIN_ID}
 
 <b>Per-User Session (used for trades!):</b>
-  sig_type: <b>{per_user_sig}</b> (0=EOA, 1=Proxy, 2=GnosisSafe)
+  sig_type: <b>{per_user_sig}</b> (0=EOA, 1=PolyProxy, 2=GnosisSafe)
   funder: <code>{per_user_funder}</code>
   signer: <code>{per_user_signer}</code>
 
@@ -156,14 +156,16 @@ async def debug_wallet_command(update: Update, context: ContextTypes.DEFAULT_TYP
 ━━━━━━━━━━━━━━━━━━━
 <b>Troubleshooting "invalid signature":</b>
 
-• If you created your Polymarket account via <b>email/browser</b>:
-  → sig_type should be <b>1</b>
+• Polymarket browser accounts use <b>sig_type=2</b> (GnosisSafe)
   → FUNDER_ADDRESS must be your <b>proxy wallet</b> address
   (Find it on polygonscan: the contract that holds your USDC)
 
 • If you use a <b>direct EOA wallet</b> (MetaMask export):
   → sig_type should be <b>0</b>
   → FUNDER_ADDRESS can be empty
+
+• sig_type=1 (PolyProxy) requires on-chain operator approval
+  → NOT recommended unless you've set that up
 
 • To fix: /disconnect → /connect again with correct settings
 • The env var SIGNATURE_TYPE is for the global client (browse only)
@@ -246,12 +248,21 @@ async def test_sign_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Helper to safely stringify EIP712 struct fields (may be objects, not strings)
     def _s(val):
         """Convert EIP712 struct field to plain string, HTML-escaped."""
-        s = str(val) if val is not None else '?'
-        # Some fields are EIP712 types with hex values
-        if hasattr(val, 'value'):
-            s = str(val.value)
-        elif hasattr(val, '__hex__'):
-            s = hex(val)
+        if val is None:
+            return '?'
+        # EIP712 types store value in .value or ._value or .__str__
+        for attr in ('value', '_value'):
+            if hasattr(val, attr):
+                v = getattr(val, attr)
+                if v is not None:
+                    return esc(str(v))
+        s = str(val)
+        # If it looks like a Python object repr, try hex()
+        if '<' in s and 'object at' in s:
+            try:
+                return esc(hex(val))
+            except Exception:
+                return esc(repr(val))
         return esc(s)
     
     # Test 3: Try signing a GTC limit order with the real token
