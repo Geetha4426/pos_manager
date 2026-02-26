@@ -178,6 +178,7 @@ async def debug_wallet_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def test_sign_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /test_sign - test order signing to diagnose 'invalid signature' errors."""
+    from html import escape as esc
     from core.polymarket_client import require_auth
     
     client = await require_auth(update)
@@ -201,8 +202,8 @@ async def test_sign_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = [
         f"🔧 <b>Signature Test</b>\n",
         f"<b>sig_type:</b> {sig_type} (0=EOA, 1=Proxy, 2=GnosisSafe)",
-        f"<b>signer:</b> <code>{signer_addr}</code>",
-        f"<b>funder:</b> <code>{funder}</code>",
+        f"<b>signer:</b> <code>{esc(str(signer_addr))}</code>",
+        f"<b>funder:</b> <code>{esc(str(funder))}</code>",
         f"<b>same?:</b> {'YES ⚠️' if str(signer_addr).lower() == str(funder).lower() else 'NO ✅ (expected for proxy)'}",
         "",
     ]
@@ -213,7 +214,7 @@ async def test_sign_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cc.set_api_creds(creds)
         lines.append("✅ API creds: OK")
     except Exception as e:
-        lines.append(f"❌ API creds: {e}")
+        lines.append(f"❌ API creds: {esc(str(e))}")
     
     # Test 2: Fetch a real active market token to use for signing test
     test_token = None
@@ -238,7 +239,18 @@ async def test_sign_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 lines.append("❌ No active markets found on Gamma API")
     except Exception as e:
-        lines.append(f"❌ Fetch active market: {e}")
+        lines.append(f"❌ Fetch active market: {esc(str(e))}")
+    
+    # Helper to safely stringify EIP712 struct fields (may be objects, not strings)
+    def _s(val):
+        """Convert EIP712 struct field to plain string, HTML-escaped."""
+        s = str(val) if val is not None else '?'
+        # Some fields are EIP712 types with hex values
+        if hasattr(val, 'value'):
+            s = str(val.value)
+        elif hasattr(val, '__hex__'):
+            s = hex(val)
+        return esc(s)
     
     # Test 3: Try signing a GTC limit order with the real token
     signed = None
@@ -258,11 +270,11 @@ async def test_sign_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             if hasattr(signed, 'order'):
                 o = signed.order
-                lines.append(f"   maker: {getattr(o, 'maker', '?')}")
-                lines.append(f"   signer: {getattr(o, 'signer', '?')}")
-                lines.append(f"   sigType: {getattr(o, 'signatureType', getattr(o, 'sigType', '?'))}")
+                lines.append(f"   maker: <code>{_s(getattr(o, 'maker', '?'))}</code>")
+                lines.append(f"   signer: <code>{_s(getattr(o, 'signer', '?'))}</code>")
+                lines.append(f"   sigType: {_s(getattr(o, 'signatureType', getattr(o, 'sigType', '?')))}")
         except Exception as e:
-            lines.append(f"❌ GTC sign: {e}")
+            lines.append(f"❌ GTC sign: {esc(str(e))}")
     else:
         lines.append("⏭️ Skipping sign test (no token)")
     
@@ -283,10 +295,10 @@ async def test_sign_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             if hasattr(fak_signed, 'order'):
                 o = fak_signed.order
-                lines.append(f"   maker: {getattr(o, 'maker', '?')}")
-                lines.append(f"   sigType: {getattr(o, 'signatureType', getattr(o, 'sigType', '?'))}")
+                lines.append(f"   maker: <code>{_s(getattr(o, 'maker', '?'))}</code>")
+                lines.append(f"   sigType: {_s(getattr(o, 'signatureType', getattr(o, 'sigType', '?')))}")
         except Exception as e:
-            lines.append(f"❌ FAK sign: {e}")
+            lines.append(f"❌ FAK sign: {esc(str(e))}")
     
     # Test 4: Try posting the FAK order (this is exactly what buy does)
     post_target = fak_signed or signed
@@ -308,9 +320,9 @@ async def test_sign_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         lines.append(f"   ⚠️ Posted but cancel failed. ID: {order_id}")
             else:
                 error = resp.get('error', str(resp)) if isinstance(resp, dict) else str(resp)
-                lines.append(f"❌ Post {post_label}: {error}")
+                lines.append(f"❌ Post {post_label}: {esc(str(error))}")
         except Exception as e:
-            lines.append(f"❌ Post {post_label}: {e}")
+            lines.append(f"❌ Post {post_label}: {esc(str(e))}")
     else:
         lines.append("⏭️ Skipping post test (signing failed)")
     
