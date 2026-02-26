@@ -215,50 +215,109 @@ async def test_sign_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         lines.append(f"❌ API creds: {e}")
     
-    # Test 2: Try signing a dummy order (don't post it)
+    # Test 2: Fetch a real active market token to use for signing test
+    test_token = None
     try:
-        from py_clob_client.clob_types import OrderArgs, OrderType
-        from py_clob_client.order_builder.constants import BUY
-        
-        # Use a known active token_id (USDC dummy)
-        test_token = "71321045679252212594626385532706912750332728571942532289631379312455583992563"
-        order_args = OrderArgs(
-            token_id=test_token,
-            price=0.50,
-            size=1.0,
-            side=BUY
-        )
-        signed = cc.create_order(order_args)
-        lines.append(f"✅ Order signing: OK")
-        lines.append(f"   Signed order type: {type(signed).__name__}")
-        
-        # Check if signed order has expected fields
-        if hasattr(signed, 'order'):
-            o = signed.order
-            lines.append(f"   maker: {getattr(o, 'maker', '?')}")
-            lines.append(f"   signer: {getattr(o, 'signer', '?')}")
-            lines.append(f"   sigType: {getattr(o, 'signatureType', getattr(o, 'sigType', '?'))}")
+        import httpx
+        async with httpx.AsyncClient(timeout=10) as hc:
+            resp = await hc.get(
+                "https://gamma-api.polymarket.com/markets",
+                params={"closed": "false", "limit": "1", "active": "true"},
+            )
+            mkts = resp.json()
+            if mkts and isinstance(mkts, list):
+                test_token = mkts[0].get("clobTokenIds")
+                if test_token:
+                    # clobTokenIds is a JSON string like '["tok1","tok2"]'
+                    import json
+                    tokens = json.loads(test_token) if isinstance(test_token, str) else test_token
+                    test_token = tokens[0] if tokens else None
+                if not test_token:
+                    test_token = mkts[0].get("tokens", [{}])[0].get("token_id")
+                lines.append(f"✅ Found active market token: ...{str(test_token)[-8:]}")
+            else:
+                lines.append("❌ No active markets found on Gamma API")
     except Exception as e:
-        lines.append(f"❌ Order signing: {e}")
+        lines.append(f"❌ Fetch active market: {e}")
     
-    # Test 3: Try posting the signed order (this will actually test the relay + polymarket)
-    try:
-        resp = cc.post_order(signed, OrderType.GTC)
-        success = resp.get('success', False) if isinstance(resp, dict) else getattr(resp, 'success', False)
-        if success:
-            lines.append(f"✅ Post order: SUCCESS")
-            # Cancel it immediately
-            order_id = resp.get('orderID', '') if isinstance(resp, dict) else getattr(resp, 'orderID', '')
-            if order_id:
-                try:
-                    cc.cancel(order_id)
-                    lines.append(f"   (cancelled test order)")
-                except Exception:
-                    lines.append(f"   ⚠️ Order posted but cancel failed. Order ID: {order_id}")
-        else:
-            error = resp.get('error', str(resp)) if isinstance(resp, dict) else str(resp)
-            lines.append(f"❌ Post order: {error}")
-    except Exception as e:
-        lines.append(f"❌ Post order: {e}")
+    # Test 3: Try signing a GTC limit order with the real token
+    signed = None
+    if test_token:
+        try:
+            from py_clob_client.clob_types import OrderArgs, MarketOrderArgs, OrderType
+            from py_clob_client.order_builder.constants import BUY
+            
+            order_args = OrderArgs(
+                token_id=test_token,
+                price=0.01,
+                size=5.0,
+                side=BUY
+            )
+            signed = cc.create_order(order_args)
+            lines.append(f"✅ GTC sign: OK")
+            
+            if hasattr(signed, 'order'):
+                o = signed.order
+                lines.append(f"   maker: {getattr(o, 'maker', '?')}")
+                lines.append(f"   signer: {getattr(o, 'signer', '?')}")
+                lines.append(f"   sigType: {getattr(o, 'signatureType', getattr(o, 'sigType', '?'))}")
+        except Exception as e:
+            lines.append(f"❌ GTC sign: {e}")
+    else:
+        lines.append("⏭️ Skipping sign test (no token)")
+    
+    # Test 3b: Try signing a FAK market order (this is what buy_market uses)
+    fak_signed = None
+    if test_token:
+        try:
+            from py_clob_client.clob_types import MarketOrderArgs, OrderType
+            from py_clob_client.order_builder.constants import BUY
+            
+            mkt_args = MarketOrderArgs(
+                token_id=test_token,
+                amount=1.0,
+                side=BUY
+            )
+            fak_signed = cc.create_market_order(mkt_args)
+            lines.append(f"✅ FAK sign: OK")
+            
+            if hasattr(fak_signed, 'order'):
+                o = fak_signed.order
+                lines.append(f"   maker: {getattr(o, 'maker', '?')}")
+                lines.append(f"   sigType: {getattr(o, 'signatureType', getattr(o, 'sigType', '?'))}")
+        except Exception as e:
+            lines.append(f"❌ FAK sign: {e}")
+    
+    # Test 4: Try posting the FAK order (this is exactly what buy does)
+    post_target = fak_signed or signed
+    post_type = OrderType.FAK if fak_signed else OrderType.GTC
+    post_label = "FAK" if fak_signed else "GTC"
+    if post_target:
+        try:
+            from py_clob_client.clob_types import OrderType
+            resp = cc.post_order(post_target, post_type)
+            success = resp.get('success', False) if isinstance(resp, dict) else getattr(resp, 'success', False)
+            if success:
+                lines.append(f"✅ Post {post_label}: SUCCESS 🎉")
+                order_id = resp.get('orderID', '') if isinstance(resp, dict) else getattr(resp, 'orderID', '')
+                if order_id:
+                    try:
+                        cc.cancel(order_id)
+                        lines.append(f"   (cancelled test order)")
+                    except Exception:
+                        lines.append(f"   ⚠️ Posted but cancel failed. ID: {order_id}")
+            else:
+                error = resp.get('error', str(resp)) if isinstance(resp, dict) else str(resp)
+                lines.append(f"❌ Post {post_label}: {error}")
+        except Exception as e:
+            lines.append(f"❌ Post {post_label}: {e}")
+    else:
+        lines.append("⏭️ Skipping post test (signing failed)")
+    
+    # Summary
+    lines.append("")
+    lines.append("<b>If post fails with 'invalid signature':</b>")
+    lines.append("→ /disconnect then /connect again")
+    lines.append("→ Ensure correct funder address")
     
     await update.message.reply_text('\n'.join(lines), parse_mode='HTML')

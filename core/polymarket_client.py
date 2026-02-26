@@ -757,9 +757,12 @@ class PolymarketClient:
         # Use CLOB client's balance-allowance endpoint with proper params
         try:
             from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+            # Use per-user sig_type from ClobClient builder, not env var
+            builder = getattr(self.clob_client, 'builder', None)
+            sig_type = getattr(builder, 'sig_type', Config.SIGNATURE_TYPE) if builder else Config.SIGNATURE_TYPE
             params = BalanceAllowanceParams(
                 asset_type=AssetType.COLLATERAL,
-                signature_type=Config.SIGNATURE_TYPE
+                signature_type=sig_type
             )
             bal = await asyncio.to_thread(
                 self._clob_call, self.clob_client.get_balance_allowance, params
@@ -2141,11 +2144,9 @@ class PolymarketClient:
             pass
         print(f"🔑 Buy order: sig_type={actual_sig_type}, funder={str(actual_funder)[:16]}..., signer={str(signer_addr)[:16]}...")
         
-        # Refresh API creds before buy to prevent stale-creds signature errors
-        try:
-            self.clob_client.set_api_creds(self.clob_client.create_or_derive_api_creds())
-        except Exception as e:
-            print(f"\u26a0\ufe0f Pre-buy creds refresh failed: {e}")
+        # NOTE: API creds already set during /unlock. Do NOT refresh here —
+        # calling create_or_derive_api_creds() before every buy adds latency
+        # and can cause race conditions. Creds are valid for the session lifetime.
         
         last_error = ""
         

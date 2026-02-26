@@ -659,17 +659,28 @@ async def execute_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 "💡 Deploy on a server in an allowed region."
             )
         elif 'invalid signature' in error_msg.lower():
-            sig_type = Config.SIGNATURE_TYPE
-            funder = Config.FUNDER_ADDRESS
+            # Show per-user sig_type (from /connect session), NOT the env var
+            per_user_sig = '?'
+            per_user_funder = '?'
+            try:
+                cc = client.clob_client if client else None
+                if cc:
+                    bld = getattr(cc, 'builder', None)
+                    per_user_sig = getattr(bld, 'sig_type', '?') if bld else '?'
+                    per_user_funder = getattr(bld, 'funder', '?') if bld else '?'
+            except Exception:
+                pass
+            sig_label = {0: 'EOA', 1: 'Proxy/Magic', 2: 'GnosisSafe'}.get(per_user_sig, str(per_user_sig))
             text = (
                 "❌ <b>Invalid Signature</b>\n\n"
                 "The order was rejected because the signature doesn't match.\n\n"
-                f"<b>Current config:</b>\n"
-                f"• SIGNATURE_TYPE: {sig_type} ({'EOA' if sig_type == 0 else 'Proxy/Magic' if sig_type == 1 else 'Proxy'})\n"
-                f"• FUNDER_ADDRESS: {'set ✅' if funder else 'NOT SET ⚠️'}\n\n"
+                f"<b>Your session config:</b>\n"
+                f"• sig_type: {per_user_sig} ({sig_label})\n"
+                f"• funder: <code>{str(per_user_funder)[:16]}...</code>\n\n"
                 "<b>Fix:</b>\n"
-                "• Email/browser login → SIGNATURE_TYPE=<b>1</b>, set FUNDER_ADDRESS to proxy wallet\n"
-                "• MetaMask/EOA → SIGNATURE_TYPE=<b>0</b>\n\n"
+                "• /disconnect → /connect again with correct wallet type\n"
+                "• Email/browser login → provide funder address (sig_type=1)\n"
+                "• MetaMask/EOA → skip funder (sig_type=0)\n\n"
                 "Use /debug_wallet for full config info."
             )
         else:
