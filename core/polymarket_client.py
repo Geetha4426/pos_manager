@@ -818,59 +818,110 @@ class PolymarketClient:
         return []
     
     async def _filter_active_positions(self, positions: List[Position]) -> List[Position]:
-        """Filter positions to only include those with active (non-resolved) markets.
+        """Filter positions to only include active (non-resolved) markets.
         
-        Uses CLOB get_market(condition_id) which returns market status.
-        Markets with accepting_orders=True are still active.
-        Also fetches live price for each active position.
+        Also enriches each position with:
+        - Human-readable market name (from Gamma API)
+        - Proper outcome label (Yes/No)
+        - Live price, P&L
+        
+        Three-layer filtering:
+        1. CLOB get_market(condition_id) → check accepting_orders, closed, resolved
+        2. CLOB price check → 404 means market is gone/resolved
+        3. Gamma API → get readable name + tokens for outcome matching
         """
         active = []
         
-        # Collect unique condition_ids to check
-        seen_conditions: Dict[str, bool] = {}  # condition_id -> is_active
+        # Cache per condition_id: {is_active, question, tokens}
+        market_cache: Dict[str, Dict] = {}
         
         for pos in positions:
             cid = pos.condition_id
             
-            # Check market status (cache within this call)
-            if cid and cid not in seen_conditions:
+            # ── Step 1: Check market status via CLOB ──
+            if cid and cid not in market_cache:
+                market_info = {'is_active': True, 'question': '', 'outcome': ''}
+                
+                # Try CLOB get_market first (fast, has status flags)
                 try:
                     market_data = await asyncio.to_thread(
                         self.clob_client.get_market, cid
                     )
                     if isinstance(market_data, dict):
-                        # Market is active if it's still accepting orders and not resolved
                         accepting = market_data.get('accepting_orders', False)
                         closed = market_data.get('closed', False)
                         resolved = market_data.get('resolved', market_data.get('is_resolved', False))
-                        end_date_str = market_data.get('end_date_iso', '')
                         active_flag = market_data.get('active', True)
                         
                         is_active = accepting and not closed and not resolved and active_flag
-                        seen_conditions[cid] = is_active
+                        market_info['is_active'] = is_active
+                        
+                        # CLOB sometimes has question field
+                        q = market_data.get('question', market_data.get('description', ''))
+                        if q and len(q) > 5:
+                            market_info['question'] = q
+                        
+                        # Map token_ids to outcomes from CLOB market data
+                        tokens = market_data.get('tokens', [])
+                        for t in tokens:
+                            tid = t.get('token_id', '')
+                            if tid == pos.token_id:
+                                market_info['outcome'] = t.get('outcome', '')
                         
                         if not is_active:
                             reason = []
-                            if closed:
-                                reason.append('closed')
-                            if resolved:
-                                reason.append('resolved')
-                            if not accepting:
-                                reason.append('not accepting orders')
-                            if not active_flag:
-                                reason.append('inactive')
-                            print(f"   ⏭️ Skipping resolved: {pos.market_question[:50]} ({', '.join(reason)})")
-                    else:
-                        seen_conditions[cid] = True  # Assume active if can't parse
+                            if closed: reason.append('closed')
+                            if resolved: reason.append('resolved')
+                            if not accepting: reason.append('not accepting orders')
+                            if not active_flag: reason.append('inactive')
+                            print(f"   ⏭️ Filtered out: {cid[:16]}... ({', '.join(reason)})")
                 except Exception as e:
-                    print(f"   ⚠️ Market check error for {cid[:12]}...: {e}")
-                    seen_conditions[cid] = True  # Assume active on error (don't hide positions)
+                    print(f"   ⚠️ CLOB market check error for {cid[:16]}...: {e}")
+                
+                # ── Step 2: Enrich with Gamma API (human-readable name) ──
+                if market_info['is_active'] or not market_info['question']:
+                    try:
+                        gamma_data = await self._fetch_with_retry(
+                            f"{Config.POLYMARKET_GAMMA_URL}/markets/{cid}",
+                            timeout=15
+                        )
+                        if gamma_data:
+                            q = gamma_data.get('question', gamma_data.get('title', ''))
+                            if q:
+                                market_info['question'] = q
+                            
+                            # Match token_id to outcome (Yes/No)
+                            tokens = gamma_data.get('tokens', [])
+                            for t in tokens:
+                                tid = t.get('token_id', '')
+                                if tid == pos.token_id:
+                                    market_info['outcome'] = t.get('outcome', '')
+                            
+                            # Double-check active status from Gamma
+                            if gamma_data.get('closed', False) or gamma_data.get('resolved', False):
+                                market_info['is_active'] = False
+                                print(f"   ⏭️ Gamma says resolved: {market_info['question'][:50]}")
+                    except Exception as e:
+                        print(f"   ⚠️ Gamma enrichment error: {e}")
+                
+                market_cache[cid] = market_info
             
-            # Skip if market is resolved
-            if cid and not seen_conditions.get(cid, True):
-                continue
+            # ── Apply filter ──
+            cached = market_cache.get(cid, {})
+            if not cached.get('is_active', True):
+                continue  # Skip resolved/closed
             
-            # Fetch live price for active position
+            # ── Enrich position with readable name ──
+            if cached.get('question'):
+                pos.market_question = cached['question']
+            elif not pos.market_question or len(pos.market_question) > 60:
+                # Still no name — use short token_id as fallback
+                pos.market_question = f"Market {pos.token_id[:8]}..."
+            
+            if cached.get('outcome'):
+                pos.outcome = cached['outcome']
+            
+            # ── Step 3: Fetch live price ──
             try:
                 live_price = await self.get_price(pos.token_id, refresh_from_clob=True)
                 if live_price > 0:
@@ -878,6 +929,10 @@ class PolymarketClient:
                     pos.value = live_price * pos.size
                     pos.pnl = (live_price - pos.avg_price) * pos.size
                     pos.pnl_percent = ((live_price / pos.avg_price) - 1) * 100 if pos.avg_price > 0 else 0
+                else:
+                    # Price returned 0 or 404 — likely resolved, skip
+                    print(f"   ⏭️ No price for {pos.market_question[:40]} — likely resolved")
+                    continue
             except Exception:
                 pass  # Keep avg_price as current_price
             
@@ -919,7 +974,11 @@ class PolymarketClient:
         return positions
     
     def _positions_from_trades(self, trades: List[Dict]) -> List[Position]:
-        """Reconstruct positions from trade history."""
+        """Reconstruct positions from trade history.
+        
+        Note: trade['market'] is a condition_id hex hash, NOT a human-readable name.
+        We store it as condition_id and resolve the name later via Gamma API.
+        """
         # Aggregate trades by token_id
         agg: Dict[str, Dict] = {}
         for trade in trades:
@@ -931,10 +990,13 @@ class PolymarketClient:
             price = float(trade.get('price', 0))
             
             if token_id not in agg:
+                # trade['market'] is condition_id (hex), NOT a readable name
+                condition_id = trade.get('market', trade.get('conditionId', ''))
                 agg[token_id] = {
-                    'size': 0, 'cost': 0, 'question': trade.get('market', 'Unknown'),
-                    'outcome': trade.get('outcome', 'Yes'),
-                    'condition_id': trade.get('conditionId', '')
+                    'size': 0, 'cost': 0,
+                    'question': '',  # Will be resolved from Gamma API later
+                    'outcome': trade.get('outcome', trade.get('trader_side', 'Yes')),
+                    'condition_id': condition_id
                 }
             if side == 'BUY':
                 agg[token_id]['cost'] += size * price
@@ -951,7 +1013,7 @@ class PolymarketClient:
             positions.append(Position(
                 token_id=token_id,
                 condition_id=info['condition_id'],
-                market_question=info['question'],
+                market_question=info['question'],  # Empty, enriched in _filter_active_positions
                 outcome=info['outcome'],
                 size=info['size'],
                 avg_price=avg_price,
