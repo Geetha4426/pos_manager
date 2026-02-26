@@ -438,6 +438,8 @@ class PolymarketClient:
             actual_funder = funder or self.clob_client.get_address()
             self._funder_address = actual_funder
             print(f"   ↳ Funder (proxy wallet): {actual_funder}")
+            print(f"   ↳ Signature type: {Config.SIGNATURE_TYPE} ({'EOA' if Config.SIGNATURE_TYPE == 0 else 'Proxy/Magic' if Config.SIGNATURE_TYPE == 1 else 'Proxy'})")
+            print(f"   ↳ Signer (EOA): {self.clob_client.get_address()}")
             via = " via relay" if Config.is_relay_enabled() else ""
             print(f"✅ Live Polymarket client initialized{via} ({_time.time()-t0:.1f}s total)")
         except Exception as e:
@@ -2178,6 +2180,8 @@ class PolymarketClient:
             except Exception as e:
                 last_error = str(e)
                 print(f"⚠️ FAK buy attempt {attempt+1} error: {e}")
+                if 'invalid signature' in str(e).lower():
+                    print(f"   💡 Check SIGNATURE_TYPE={Config.SIGNATURE_TYPE} and FUNDER_ADDRESS={Config.FUNDER_ADDRESS[:10]}..." if Config.FUNDER_ADDRESS else f"   💡 Check SIGNATURE_TYPE={Config.SIGNATURE_TYPE} — FUNDER_ADDRESS is NOT SET")
             
             # Brief pause before retry
             if attempt == 0:
@@ -2214,6 +2218,10 @@ class PolymarketClient:
                     )
         except Exception as e:
             print(f"⚠️ GTC buy fallback error: {e}")
+            if 'invalid signature' in str(e).lower():
+                print(f"   💡 Signature issue — check your wallet config:")
+                print(f"   SIGNATURE_TYPE={Config.SIGNATURE_TYPE} (0=EOA, 1=Proxy/Magic, 2=Proxy)")
+                print(f"   FUNDER_ADDRESS={'set: '+Config.FUNDER_ADDRESS[:10]+'...' if Config.FUNDER_ADDRESS else 'NOT SET (required for proxy wallets)'}")
             last_error = str(e)
         
         return OrderResult(success=False, error=str(last_error))
@@ -2373,9 +2381,13 @@ class PolymarketClient:
         """
         try:
             if self.clob_client:
-                # Use py-clob-client's get_order_book
-                params = BookParams(token_id=token_id)
-                book = self.clob_client.get_order_book(params)
+                # Pass token_id string directly (BookParams causes stringification bugs in some versions)
+                try:
+                    book = self.clob_client.get_order_book(token_id)
+                except TypeError:
+                    # Some py-clob-client versions require BookParams
+                    params = BookParams(token_id=token_id)
+                    book = self.clob_client.get_order_book(params)
                 
                 # Parse response
                 bids = []

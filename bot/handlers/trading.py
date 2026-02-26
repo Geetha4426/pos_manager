@@ -658,6 +658,20 @@ async def execute_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 "Russia, Belarus, Myanmar, Venezuela, Zimbabwe, France\n\n"
                 "💡 Deploy on a server in an allowed region."
             )
+        elif 'invalid signature' in error_msg.lower():
+            sig_type = Config.SIGNATURE_TYPE
+            funder = Config.FUNDER_ADDRESS
+            text = (
+                "❌ <b>Invalid Signature</b>\n\n"
+                "The order was rejected because the signature doesn't match.\n\n"
+                f"<b>Current config:</b>\n"
+                f"• SIGNATURE_TYPE: {sig_type} ({'EOA' if sig_type == 0 else 'Proxy/Magic' if sig_type == 1 else 'Proxy'})\n"
+                f"• FUNDER_ADDRESS: {'set ✅' if funder else 'NOT SET ⚠️'}\n\n"
+                "<b>Fix:</b>\n"
+                "• Email/browser login → SIGNATURE_TYPE=<b>1</b>, set FUNDER_ADDRESS to proxy wallet\n"
+                "• MetaMask/EOA → SIGNATURE_TYPE=<b>0</b>\n\n"
+                "Use /debug_wallet for full config info."
+            )
         else:
             text = f"""
 ❌ <b>Buy Failed</b>
