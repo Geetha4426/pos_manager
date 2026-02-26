@@ -104,6 +104,12 @@ class Config:
     # DATABASE
     # ═══════════════════════════════════════════════════════════════════
     DATABASE_PATH = os.getenv('DATABASE_PATH', 'data/favorites.db')
+    USERS_DB_PATH = os.getenv('USERS_DB_PATH', 'data/users.db')
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # MULTI-USER SESSION
+    # ═══════════════════════════════════════════════════════════════════
+    SESSION_TIMEOUT = int(os.getenv('SESSION_TIMEOUT', '1800'))  # 30 min default
     
     @classmethod
     def is_paper_mode(cls) -> bool:
@@ -143,5 +149,6 @@ class Config:
         print(f"🔐 Wallet: {'✅' if cls.POLYGON_PRIVATE_KEY else '❌'}")
         print(f"💳 Funder: {'✅' if cls.FUNDER_ADDRESS else '❌'}")
         print(f"🔀 CLOB Relay: {'✅ ' + cls.CLOB_RELAY_URL if cls.CLOB_RELAY_URL else '❌ Direct (may be geo-blocked)'}")
+        print(f"👥 Multi-user: ON (session timeout: {cls.SESSION_TIMEOUT}s)")
         print(f"🎯 Sports: {', '.join(cls.SPORTS_PRIORITY)}")
         print("=" * 50 + "\n")

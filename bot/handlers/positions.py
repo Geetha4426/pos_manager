@@ -17,7 +17,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from config import Config
-from core.polymarket_client import get_polymarket_client, Position
+from core.polymarket_client import get_polymarket_client, require_auth, Position
 from bot.keyboards.inline import (
     positions_keyboard, position_detail_keyboard, sell_confirm_keyboard,
     instant_sell_keyboard
@@ -30,7 +30,9 @@ CUSTOM_SELL_PERCENT = 0
 
 async def positions_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /positions command - show all active positions with live P&L."""
-    client = get_polymarket_client()
+    client = await require_auth(update)
+    if not client:
+        return
     positions = await client.get_positions()
     
     # Try to enrich with WS live prices
@@ -243,7 +245,9 @@ async def instant_sell_callback(update: Update, context: ContextTypes.DEFAULT_TY
         parse_mode='HTML'
     )
     
-    client = get_polymarket_client()
+    client = await require_auth(update)
+    if not client:
+        return
     
     # Use instant_sell for maximum speed
     if hasattr(client, 'instant_sell'):
@@ -368,7 +372,9 @@ async def confirm_sell_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text("⚠️ Position not found. Use /positions to refresh.")
         return
     
-    client = get_polymarket_client()
+    client = await require_auth(update)
+    if not client:
+        return
     result = await client.sell_market(pos.token_id, percent=percent)
     
     if result.success:

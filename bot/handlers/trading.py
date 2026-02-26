@@ -14,7 +14,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from config import Config
-from core.polymarket_client import get_polymarket_client, event_status
+from core.polymarket_client import get_polymarket_client, require_auth, event_status
 from bot.keyboards.inline import (
     category_keyboard, sports_keyboard, leagues_keyboard, events_keyboard,
     sub_markets_keyboard, outcome_keyboard, amount_keyboard,
@@ -567,7 +567,9 @@ async def execute_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         'outcome': outcome
     }
     
-    client = get_polymarket_client()
+    client = await require_auth(update)
+    if not client:
+        return
     result = await client.buy_market(token_id, amount, market_info=market_info)
     
     if result.success:

@@ -12,13 +12,15 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from config import Config
-from core.polymarket_client import get_polymarket_client
+from core.polymarket_client import get_polymarket_client, require_auth
 from bot.keyboards.inline import main_menu_keyboard
 
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /balance command - show wallet overview."""
-    client = get_polymarket_client()
+    client = await require_auth(update)
+    if not client:
+        return
     
     balance = await client.get_balance()
     positions = await client.get_positions()

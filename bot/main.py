@@ -62,6 +62,10 @@ from bot.handlers.alerts import (
     alerts_command, alert_command, stoploss_command, takeprofit_command,
     delete_alert_callback, alerts_callback
 )
+from bot.handlers.auth import (
+    build_connect_handler, build_unlock_handler, build_disconnect_handler,
+    lock_command, mystatus_command
+)
 
 
 # Logging
@@ -83,7 +87,12 @@ async def start_command(update: Update, context):
         f"Welcome, {user.first_name}! ⚡\n\n"
         f"<b>Mode:</b> {mode}\n"
         f"<b>Instant Sell:</b> {instant}\n\n"
-        f"<b>Commands:</b>\n"
+        f"<b>🔐 Wallet:</b>\n"
+        f"🔗 /connect - Link your wallet\n"
+        f"🔓 /unlock - Unlock to trade\n"
+        f"🔒 /lock - Lock session\n"
+        f"📋 /mystatus - Session info\n\n"
+        f"<b>📊 Trading:</b>\n"
         f"📊 /positions - View positions (live P&L)\n"
         f"💰 /balance - Wallet overview\n"
         f"🛒 /buy - Buy new position\n"
@@ -105,6 +114,13 @@ async def help_command(update: Update, context):
     text = """
 📖 <b>Bot Commands</b>
 
+<b>🔐 Wallet:</b>
+/connect - Link your wallet (encrypted)
+/unlock - Start trading session
+/lock - End session (clear from memory)
+/disconnect - Remove wallet permanently
+/mystatus - Session & wallet info
+
 <b>Trading:</b>
 /buy - Start buy flow with categories
 /search <query> - Search markets
@@ -125,9 +141,9 @@ async def help_command(update: Update, context):
 /help - This help
 
 <b>Tips:</b>
-• Select Sport → Event → Sub-Market → Yes/No
-• Sub-markets show toss winner, top scorer, etc.
-• Partial sells: 25%, 50%, or custom %
+• Use /connect first, then /unlock to start trading
+• Sessions auto-lock after 30 min of inactivity
+• Your private key is AES-256-GCM encrypted
 """
     
     await update.message.reply_text(text, parse_mode='HTML')
@@ -235,6 +251,26 @@ def main():
         except Exception as e:
             print(f"⚠️ WebSocket start error: {e}")
         
+        # 4. Initialize user manager and start session cleanup
+        try:
+            from core.user_manager import get_user_manager
+            um = get_user_manager()
+            await um._init_db()
+            user_count = await um.get_user_count()
+            print(f"👥 User manager initialized ({user_count} registered users)")
+            
+            # Periodic session cleanup (every 5 minutes)
+            async def _session_cleanup_loop():
+                while True:
+                    await asyncio.sleep(300)
+                    try:
+                        await um.cleanup_expired()
+                    except Exception:
+                        pass
+            asyncio.create_task(_session_cleanup_loop())
+        except Exception as e:
+            print(f"⚠️ User manager init error: {e}")
+        
         print(f"🚀 Total init: {_time.time()-t0:.1f}s")
     
     app.post_init = post_init
@@ -256,6 +292,16 @@ def main():
     app.add_handler(CommandHandler("alert", alert_command))
     app.add_handler(CommandHandler("stoploss", stoploss_command))
     app.add_handler(CommandHandler("takeprofit", takeprofit_command))
+    app.add_handler(CommandHandler("lock", lock_command))
+    app.add_handler(CommandHandler("mystatus", mystatus_command))
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # AUTH CONVERSATION HANDLERS (connect, unlock, disconnect)
+    # Must be before other ConversationHandlers
+    # ═══════════════════════════════════════════════════════════════════
+    app.add_handler(build_connect_handler())
+    app.add_handler(build_unlock_handler())
+    app.add_handler(build_disconnect_handler())
     
     # ═══════════════════════════════════════════════════════════════════
     # CONVERSATION HANDLERS (must be BEFORE regular callback handlers)
@@ -401,7 +447,8 @@ def main():
     # ═══════════════════════════════════════════════════════════════════
     print("🚀 Starting Polymarket Telegram Sniper Bot...")
     print("⚡ Features: Instant sell, live P&L, WebSocket prices")
-    print("📊 Sports flow: Sport → Events → Sub-Markets → Yes/No")
+    print("� Multi-user: /connect → /unlock → trade")
+    print("�📊 Sports flow: Sport → Events → Sub-Markets → Yes/No")
     print("Press Ctrl+C to stop.\n")
     
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)

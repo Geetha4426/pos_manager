@@ -825,12 +825,16 @@ class PolymarketClient:
         - Proper outcome label (Yes/No)
         - Live price, P&L
         
-        Three-layer filtering:
+        Four-layer filtering:
         1. CLOB get_market(condition_id) → check accepting_orders, closed, resolved
-        2. CLOB price check → 404 means market is gone/resolved
-        3. Gamma API → get readable name + tokens for outcome matching
+        2. End-date check → if end_date is in the past, market is done
+        3. Gamma API → get readable name + tokens + double-check resolved/end_date
+        4. CLOB price check → 0 or 404 means market is gone/resolved
         """
+        from datetime import datetime, timezone
+        
         active = []
+        now_utc = datetime.now(timezone.utc)
         
         # Cache per condition_id: {is_active, question, tokens}
         market_cache: Dict[str, Dict] = {}
@@ -856,6 +860,17 @@ class PolymarketClient:
                         is_active = accepting and not closed and not resolved and active_flag
                         market_info['is_active'] = is_active
                         
+                        # Check end_date from CLOB
+                        end_date_str = market_data.get('end_date_iso', market_data.get('end_date', ''))
+                        if end_date_str and market_info['is_active']:
+                            try:
+                                end_dt = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
+                                if end_dt < now_utc:
+                                    market_info['is_active'] = False
+                                    print(f"   ⏭️ End-date passed (CLOB): {end_date_str}")
+                            except Exception:
+                                pass
+                        
                         # CLOB sometimes has question field
                         q = market_data.get('question', market_data.get('description', ''))
                         if q and len(q) > 5:
@@ -868,17 +883,21 @@ class PolymarketClient:
                             if tid == pos.token_id:
                                 market_info['outcome'] = t.get('outcome', '')
                         
-                        if not is_active:
+                        if not is_active and market_info['is_active'] is True:
+                            pass  # end_date override might have caught it
+                        if not market_info['is_active']:
                             reason = []
                             if closed: reason.append('closed')
                             if resolved: reason.append('resolved')
                             if not accepting: reason.append('not accepting orders')
                             if not active_flag: reason.append('inactive')
+                            if end_date_str:
+                                reason.append(f'end_date={end_date_str}')
                             print(f"   ⏭️ Filtered out: {cid[:16]}... ({', '.join(reason)})")
                 except Exception as e:
                     print(f"   ⚠️ CLOB market check error for {cid[:16]}...: {e}")
                 
-                # ── Step 2: Enrich with Gamma API (human-readable name) ──
+                # ── Step 2: Enrich with Gamma API (human-readable name + end_date) ──
                 if market_info['is_active'] or not market_info['question']:
                     try:
                         gamma_data = await self._fetch_with_retry(
@@ -901,6 +920,36 @@ class PolymarketClient:
                             if gamma_data.get('closed', False) or gamma_data.get('resolved', False):
                                 market_info['is_active'] = False
                                 print(f"   ⏭️ Gamma says resolved: {market_info['question'][:50]}")
+                            
+                            # Check end_date from Gamma (more reliable)
+                            if market_info['is_active']:
+                                end_date_str = gamma_data.get('end_date_iso', gamma_data.get('endDate', gamma_data.get('end_date', '')))
+                                if end_date_str:
+                                    try:
+                                        end_dt = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
+                                        if end_dt < now_utc:
+                                            market_info['is_active'] = False
+                                            print(f"   ⏭️ End-date passed (Gamma): {market_info['question'][:40]} ended {end_date_str}")
+                                    except Exception:
+                                        pass
+                                
+                                # Also check accepting_order_timestamp / game_start_date
+                                # Some markets stop accepting orders when the game starts
+                                game_start = gamma_data.get('game_start_date', gamma_data.get('start_date', ''))
+                                accepting_orders = gamma_data.get('accepting_orders', True)
+                                if isinstance(accepting_orders, bool) and not accepting_orders:
+                                    market_info['is_active'] = False
+                                    print(f"   ⏭️ Gamma not accepting orders: {market_info['question'][:40]}")
+                                elif game_start and market_info['is_active']:
+                                    try:
+                                        game_dt = datetime.fromisoformat(game_start.replace('Z', '+00:00'))
+                                        if game_dt < now_utc:
+                                            # Game has started — check if market is still accepting
+                                            # Some markets stay open during game, some don't
+                                            # Only filter if Gamma explicitly says closed/not-accepting
+                                            pass
+                                    except Exception:
+                                        pass
                     except Exception as e:
                         print(f"   ⚠️ Gamma enrichment error: {e}")
                 
@@ -909,7 +958,7 @@ class PolymarketClient:
             # ── Apply filter ──
             cached = market_cache.get(cid, {})
             if not cached.get('is_active', True):
-                continue  # Skip resolved/closed
+                continue  # Skip resolved/closed/ended
             
             # ── Enrich position with readable name ──
             if cached.get('question'):
@@ -921,7 +970,7 @@ class PolymarketClient:
             if cached.get('outcome'):
                 pos.outcome = cached['outcome']
             
-            # ── Step 3: Fetch live price ──
+            # ── Step 4: Fetch live price ──
             try:
                 live_price = await self.get_price(pos.token_id, refresh_from_clob=True)
                 if live_price > 0:
@@ -2453,3 +2502,60 @@ async def init_polymarket_client() -> PolymarketClient:
         await _client.async_init()
         _initialized = True
     return _client
+
+
+def get_user_client(telegram_id: int) -> Optional[PolymarketClient]:
+    """Get a PolymarketClient using a specific user's ClobClient.
+    
+    Creates a lightweight clone of the shared client that uses the
+    user's ClobClient from UserManager for authenticated operations,
+    while sharing the Gamma API session and caches.
+    
+    Returns None if user has no active (unlocked) session.
+    """
+    from core.user_manager import get_user_manager
+    um = get_user_manager()
+    
+    session = um.get_session(telegram_id)
+    if not session or not session.clob_client:
+        return None
+    
+    # Clone the shared client but swap ClobClient
+    shared = get_polymarket_client()
+    user_client = PolymarketClient.__new__(PolymarketClient)
+    user_client.__dict__.update(shared.__dict__)
+    user_client.clob_client = session.clob_client
+    user_client.is_paper = False
+    user_client._funder_address = session.funder_address or ''
+    
+    return user_client
+
+
+async def require_auth(update) -> Optional[PolymarketClient]:
+    """Get authenticated client for the calling user, or send error message.
+    
+    Usage in handlers:
+        client = await require_auth(update)
+        if not client:
+            return
+    """
+    from core.user_manager import get_user_manager
+    
+    user_id = update.effective_user.id
+    client = get_user_client(user_id)
+    if client:
+        return client
+    
+    # Determine why auth failed
+    um = get_user_manager()
+    if await um.is_registered(user_id):
+        msg = "🔒 Session locked. Use /unlock to unlock your wallet."
+    else:
+        msg = "🔗 No wallet connected. Use /connect to link your wallet."
+    
+    if update.callback_query:
+        await update.callback_query.answer(msg, show_alert=True)
+    elif update.message:
+        await update.message.reply_text(msg)
+    
+    return None

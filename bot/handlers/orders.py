@@ -11,12 +11,14 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from core.polymarket_client import get_polymarket_client
+from core.polymarket_client import get_polymarket_client, require_auth
 
 
 async def orders_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /orders command - show all open orders."""
-    client = get_polymarket_client()
+    client = await require_auth(update)
+    if not client:
+        return
     
     orders = await client.get_open_orders()
     
@@ -88,7 +90,9 @@ async def cancel_order_callback(update: Update, context: ContextTypes.DEFAULT_TY
     
     order_id = query.data.replace("cancel_", "")
     
-    client = get_polymarket_client()
+    client = await require_auth(update)
+    if not client:
+        return
     success = await client.cancel_order(order_id)
     
     if success:
@@ -118,7 +122,9 @@ async def cancel_all_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     await query.answer("⏳ Cancelling all orders...")
     
-    client = get_polymarket_client()
+    client = await require_auth(update)
+    if not client:
+        return
     count = await client.cancel_all_orders()
     
     await query.edit_message_text(
