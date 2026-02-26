@@ -456,7 +456,8 @@ def main():
         await application.bot.delete_webhook(drop_pending_updates=True)
         print("✅ Webhook cleared, polling mode active")
     
-    app.post_init = post_init    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    app.post_init = post_init
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
 if __name__ == "__main__":
