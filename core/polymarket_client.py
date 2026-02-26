@@ -2130,10 +2130,16 @@ class PolymarketClient:
         if self.is_paper or not self.clob_client:
             return await self._paper_buy(token_id, amount_usd, market_info)
         
-        # Get actual sig type from ClobClient (may differ from env var)
-        actual_sig_type = getattr(self.clob_client, 'sig_type', 
-                         getattr(self.clob_client, 'signature_type', '?'))
-        actual_funder = getattr(self, '_funder_address', Config.FUNDER_ADDRESS or '(default)')
+        # Get actual sig type from ClobClient's OrderBuilder
+        builder = getattr(self.clob_client, 'builder', None)
+        actual_sig_type = getattr(builder, 'sig_type', '?') if builder else '?'
+        actual_funder = getattr(builder, 'funder', getattr(self, '_funder_address', '?')) if builder else getattr(self, '_funder_address', '?')
+        signer_addr = '?'
+        try:
+            signer_addr = self.clob_client.get_address()
+        except Exception:
+            pass
+        print(f"🔑 Buy order: sig_type={actual_sig_type}, funder={str(actual_funder)[:16]}..., signer={str(signer_addr)[:16]}...")
         
         # Refresh API creds before buy to prevent stale-creds signature errors
         try:

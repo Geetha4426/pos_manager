@@ -53,7 +53,7 @@ from bot.handlers.favorites import (
     favorites_command, favorites_callback,
     fav_add_callback, fav_view_callback, fav_del_callback
 )
-from bot.handlers.wallet import balance_command, balance_callback, debug_wallet_command
+from bot.handlers.wallet import balance_command, balance_callback, debug_wallet_command, test_sign_command
 from bot.handlers.orders import (
     orders_command, orders_callback, cancel_order_callback,
     cancel_all_callback, order_book_callback
@@ -283,6 +283,7 @@ def main():
     app.add_handler(CommandHandler("positions", positions_command))
     app.add_handler(CommandHandler("balance", balance_command))
     app.add_handler(CommandHandler("debug_wallet", debug_wallet_command))
+    app.add_handler(CommandHandler("test_sign", test_sign_command))
     app.add_handler(CommandHandler("buy", buy_command))
     app.add_handler(CommandHandler("search", search_command))
     app.add_handler(CommandHandler("info", info_command))

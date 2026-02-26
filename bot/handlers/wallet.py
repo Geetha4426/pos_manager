@@ -103,6 +103,7 @@ async def debug_wallet_command(update: Update, context: ContextTypes.DEFAULT_TYP
     # Also check per-user session sig_type
     per_user_sig = "(no session)"
     per_user_funder = "(no session)"
+    per_user_signer = "(no session)"
     try:
         from core.user_manager import get_user_manager
         um = get_user_manager()
@@ -111,10 +112,16 @@ async def debug_wallet_command(update: Update, context: ContextTypes.DEFAULT_TYP
         if session:
             per_user_sig = session.signature_type
             per_user_funder = session.funder_address or "(empty)"
-            # Also get from the session's ClobClient
+            # Get from the session's ClobClient.builder (actual runtime value)
             if session.clob_client:
-                per_user_sig = getattr(session.clob_client, 'sig_type',
-                              getattr(session.clob_client, 'signature_type', per_user_sig))
+                builder = getattr(session.clob_client, 'builder', None)
+                if builder:
+                    per_user_sig = getattr(builder, 'sig_type', per_user_sig)
+                    per_user_funder = getattr(builder, 'funder', per_user_funder)
+                try:
+                    per_user_signer = session.clob_client.get_address()
+                except Exception:
+                    pass
     except Exception:
         pass
     
@@ -137,9 +144,10 @@ async def debug_wallet_command(update: Update, context: ContextTypes.DEFAULT_TYP
 <b>Env SIGNATURE_TYPE:</b> {sig_type} ({sig_label})
 <b>Chain ID:</b> {Config.POLYGON_CHAIN_ID}
 
-<b>Per-User Session:</b>
-  sig_type: <b>{per_user_sig}</b> (this is used for trades!)
+<b>Per-User Session (used for trades!):</b>
+  sig_type: <b>{per_user_sig}</b> (0=EOA, 1=Proxy, 2=GnosisSafe)
   funder: <code>{per_user_funder}</code>
+  signer: <code>{per_user_signer}</code>
 
 <b>CLOB URL:</b> {Config.get_clob_url()}
 <b>Relay:</b> {relay}
@@ -166,3 +174,91 @@ async def debug_wallet_command(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.callback_query.edit_message_text(text, parse_mode='HTML')
     else:
         await update.message.reply_text(text, parse_mode='HTML')
+
+
+async def test_sign_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /test_sign - test order signing to diagnose 'invalid signature' errors."""
+    from core.polymarket_client import require_auth
+    
+    client = await require_auth(update)
+    if not client:
+        return
+    
+    cc = client.clob_client
+    if not cc:
+        await update.message.reply_text("❌ No ClobClient available.")
+        return
+    
+    builder = getattr(cc, 'builder', None)
+    sig_type = getattr(builder, 'sig_type', '?') if builder else '?'
+    funder = getattr(builder, 'funder', '?') if builder else '?'
+    
+    try:
+        signer_addr = cc.get_address()
+    except Exception:
+        signer_addr = '?'
+    
+    lines = [
+        f"🔧 <b>Signature Test</b>\n",
+        f"<b>sig_type:</b> {sig_type} (0=EOA, 1=Proxy, 2=GnosisSafe)",
+        f"<b>signer:</b> <code>{signer_addr}</code>",
+        f"<b>funder:</b> <code>{funder}</code>",
+        f"<b>same?:</b> {'YES ⚠️' if str(signer_addr).lower() == str(funder).lower() else 'NO ✅ (expected for proxy)'}",
+        "",
+    ]
+    
+    # Test 1: Create API creds
+    try:
+        creds = cc.create_or_derive_api_creds()
+        cc.set_api_creds(creds)
+        lines.append("✅ API creds: OK")
+    except Exception as e:
+        lines.append(f"❌ API creds: {e}")
+    
+    # Test 2: Try signing a dummy order (don't post it)
+    try:
+        from py_clob_client.clob_types import OrderArgs, OrderType
+        from py_clob_client.order_builder.constants import BUY
+        
+        # Use a known active token_id (USDC dummy)
+        test_token = "71321045679252212594626385532706912750332728571942532289631379312455583992563"
+        order_args = OrderArgs(
+            token_id=test_token,
+            price=0.50,
+            size=1.0,
+            side=BUY
+        )
+        signed = cc.create_order(order_args)
+        lines.append(f"✅ Order signing: OK")
+        lines.append(f"   Signed order type: {type(signed).__name__}")
+        
+        # Check if signed order has expected fields
+        if hasattr(signed, 'order'):
+            o = signed.order
+            lines.append(f"   maker: {getattr(o, 'maker', '?')}")
+            lines.append(f"   signer: {getattr(o, 'signer', '?')}")
+            lines.append(f"   sigType: {getattr(o, 'signatureType', getattr(o, 'sigType', '?'))}")
+    except Exception as e:
+        lines.append(f"❌ Order signing: {e}")
+    
+    # Test 3: Try posting the signed order (this will actually test the relay + polymarket)
+    try:
+        resp = cc.post_order(signed, OrderType.GTC)
+        success = resp.get('success', False) if isinstance(resp, dict) else getattr(resp, 'success', False)
+        if success:
+            lines.append(f"✅ Post order: SUCCESS")
+            # Cancel it immediately
+            order_id = resp.get('orderID', '') if isinstance(resp, dict) else getattr(resp, 'orderID', '')
+            if order_id:
+                try:
+                    cc.cancel(order_id)
+                    lines.append(f"   (cancelled test order)")
+                except Exception:
+                    lines.append(f"   ⚠️ Order posted but cancel failed. Order ID: {order_id}")
+        else:
+            error = resp.get('error', str(resp)) if isinstance(resp, dict) else str(resp)
+            lines.append(f"❌ Post order: {error}")
+    except Exception as e:
+        lines.append(f"❌ Post order: {e}")
+    
+    await update.message.reply_text('\n'.join(lines), parse_mode='HTML')
