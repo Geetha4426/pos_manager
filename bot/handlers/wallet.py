@@ -300,36 +300,85 @@ async def test_sign_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             lines.append(f"❌ FAK sign: {esc(str(e))}")
     
-    # Test 4: Try posting the FAK order (this is exactly what buy does)
+    # Test 4: Post order via RAW httpx (bypass py-clob post_order to get full response)
     post_target = fak_signed or signed
-    post_type = OrderType.FAK if fak_signed else OrderType.GTC
+    post_type = "FAK" if fak_signed else "GTC"
     post_label = "FAK" if fak_signed else "GTC"
     if post_target:
         try:
-            from py_clob_client.clob_types import OrderType
-            resp = cc.post_order(post_target, post_type)
-            success = resp.get('success', False) if isinstance(resp, dict) else getattr(resp, 'success', False)
-            if success:
-                lines.append(f"✅ Post {post_label}: SUCCESS 🎉")
-                order_id = resp.get('orderID', '') if isinstance(resp, dict) else getattr(resp, 'orderID', '')
-                if order_id:
-                    try:
-                        cc.cancel(order_id)
-                        lines.append(f"   (cancelled test order)")
-                    except Exception:
-                        lines.append(f"   ⚠️ Posted but cancel failed. ID: {order_id}")
-            else:
-                error = resp.get('error', str(resp)) if isinstance(resp, dict) else str(resp)
-                lines.append(f"❌ Post {post_label}: {esc(str(error))}")
+            import json as _json
+            from py_clob_client.headers.headers import create_level_2_headers
+            from py_clob_client.clob_types import RequestArgs
+            
+            # Build exact same body as post_order
+            body = {
+                "order": post_target.dict(),
+                "owner": cc.creds.api_key,
+                "orderType": post_type,
+                "postOnly": False,
+            }
+            serialized = _json.dumps(body, separators=(",", ":"), ensure_ascii=False)
+            
+            # Show key order fields
+            od = body["order"]
+            lines.append(f"\n<b>Order payload:</b>")
+            lines.append(f"   maker: <code>{esc(str(od.get('maker','')))[:20]}...</code>")
+            lines.append(f"   signer: <code>{esc(str(od.get('signer','')))[:20]}...</code>")
+            lines.append(f"   sigType: {od.get('signatureType', '?')}")
+            lines.append(f"   side: {od.get('side', '?')}")
+            lines.append(f"   tokenId: ...{esc(str(od.get('tokenId','')))[-8:]}")
+            lines.append(f"   sig: <code>{esc(str(od.get('signature','')))[:20]}...</code>")
+            
+            # Build L2 auth headers
+            req_args = RequestArgs(
+                method="POST",
+                request_path="/order",
+                body=body,
+                serialized_body=serialized,
+            )
+            headers = create_level_2_headers(cc.signer, cc.creds, req_args)
+            headers["Content-Type"] = "application/json"
+            headers["User-Agent"] = "py_clob_client"
+            
+            lines.append(f"\n<b>Auth headers:</b>")
+            lines.append(f"   POLY_ADDRESS: <code>{esc(headers.get('POLY_ADDRESS','')[:16])}...</code>")
+            lines.append(f"   POLY_API_KEY: <code>{esc(headers.get('POLY_API_KEY','')[:12])}...</code>")
+            
+            # Post via raw httpx to relay
+            import httpx
+            relay_url = cc.host + "/order"
+            async with httpx.AsyncClient(timeout=15) as hc:
+                raw_resp = await hc.post(relay_url, content=serialized.encode(), headers=headers)
+            
+            lines.append(f"\n<b>POST {post_label} → {esc(cc.host[:30])}:</b>")
+            lines.append(f"   status: {raw_resp.status_code}")
+            resp_text = raw_resp.text[:200]
+            lines.append(f"   body: <code>{esc(resp_text)}</code>")
+            
+            if raw_resp.status_code == 200:
+                try:
+                    rj = raw_resp.json()
+                    if rj.get('success'):
+                        lines.append(f"✅ Post {post_label}: SUCCESS 🎉")
+                        oid = rj.get('orderID', '')
+                        if oid:
+                            try:
+                                cc.cancel(oid)
+                                lines.append(f"   (cancelled)")
+                            except Exception:
+                                lines.append(f"   ⚠️ Cancel failed. ID: {oid}")
+                except Exception:
+                    pass
+                    
         except Exception as e:
-            lines.append(f"❌ Post {post_label}: {esc(str(e))}")
+            lines.append(f"❌ Post {post_label}: {esc(str(e)[:200])}")
     else:
         lines.append("⏭️ Skipping post test (signing failed)")
     
     # Summary
     lines.append("")
-    lines.append("<b>If post fails with 'invalid signature':</b>")
-    lines.append("→ /disconnect then /connect again")
-    lines.append("→ Ensure correct funder address")
+    lines.append("<b>If 'invalid signature':</b>")
+    lines.append("→ /disconnect → /connect with correct funder")
+    lines.append("→ Check operator approval on polygonscan")
     
     await update.message.reply_text('\n'.join(lines), parse_mode='HTML')
