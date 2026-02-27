@@ -856,6 +856,16 @@ class PolymarketClient:
         if not data or not isinstance(data, list):
             return []
         
+        # Debug: log raw fields of first item to help diagnose phantom positions
+        if data:
+            sample = data[0]
+            debug_keys = {k: v for k, v in sample.items() if k in (
+                'size', 'curPrice', 'resolved', 'closed', 'redeemed',
+                'cashOutPrice', 'cashoutPrice', 'acceptingOrders',
+                'accepting_orders', 'title', 'endDate', 'end_date'
+            )}
+            print(f"📊 Data API sample fields: {debug_keys}")
+        
         positions = []
         skipped = 0
         for item in data:
@@ -867,18 +877,31 @@ class PolymarketClient:
                 avg_price = float(item.get('avgPrice', item.get('price', 0.5)))
                 cur_price = float(item.get('curPrice', item.get('currentPrice', avg_price)))
                 
+                title = item.get('title', item.get('question', ''))[:40]
+                
                 # ── Skip resolved/settled markets ──
                 # Price snaps to 0 or 1 when market resolves
                 if cur_price <= 0.02 or cur_price >= 0.98:
-                    title = item.get('title', item.get('question', ''))[:40]
                     print(f"   ⏭️ Skipping settled (price={cur_price:.2f}): {title}")
                     skipped += 1
                     continue
                 
                 # Skip if API explicitly says resolved/closed/redeemed
                 if item.get('resolved') or item.get('closed') or item.get('redeemed'):
-                    title = item.get('title', item.get('question', ''))[:40]
                     print(f"   ⏭️ Skipping resolved: {title}")
+                    skipped += 1
+                    continue
+                
+                # Skip if cashOutPrice is set (position was redeemed/cashed out)
+                cash_out = item.get('cashOutPrice', item.get('cashoutPrice', None))
+                if cash_out is not None:
+                    print(f"   ⏭️ Skipping cashed out (cashOutPrice={cash_out}): {title}")
+                    skipped += 1
+                    continue
+                
+                # Skip if market event is over (acceptingOrders=false)
+                if item.get('acceptingOrders') is False or item.get('accepting_orders') is False:
+                    print(f"   ⏭️ Skipping not accepting orders: {title}")
                     skipped += 1
                     continue
                 

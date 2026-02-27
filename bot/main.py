@@ -85,11 +85,6 @@ async def start_command(update: Update, context):
     """Handle /start command - main dashboard like Trojan/BonkBot."""
     user = update.effective_user
     
-    # Auth guard: restrict to TELEGRAM_CHAT_ID if configured
-    if Config.TELEGRAM_CHAT_ID and str(user.id) != str(Config.TELEGRAM_CHAT_ID):
-        await update.message.reply_text("🚫 Unauthorized. This bot is private.")
-        return
-    
     # Check wallet status
     wallet_status = "🔴 Not Connected"
     wallet_addr = ""

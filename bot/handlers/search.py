@@ -225,7 +225,11 @@ async def hot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if not markets:
-        await update.message.reply_text("📭 No trending markets found")
+        text = "📭 No trending markets found"
+        if update.callback_query:
+            await update.callback_query.edit_message_text(text)
+        else:
+            await update.message.reply_text(text)
         return
     
     # Sort by volume
