@@ -48,7 +48,8 @@ from bot.handlers.trading import (
     event_callback, events_page_callback, sub_market_callback,
     back_events_callback, back_sub_callback, back_out_callback,
     outcome_callback, amount_callback, market_callback, page_callback,
-    execute_buy_callback, custom_amount_input, CUSTOM_AMOUNT
+    execute_buy_callback, custom_amount_input, CUSTOM_AMOUNT,
+    refresh_prices_callback
 )
 from bot.handlers.search import (
     search_command, search_callback, search_text_input, info_command,
@@ -576,6 +577,7 @@ def main():
     
     # Trading flow (non-custom amounts - custom is handled by ConversationHandler)
     app.add_handler(CallbackQueryHandler(outcome_callback, pattern="^out_"))
+    app.add_handler(CallbackQueryHandler(refresh_prices_callback, pattern="^refresh_prices$"))
     app.add_handler(CallbackQueryHandler(amount_callback, pattern=r"^amt_(?!custom)\w+$"))
     app.add_handler(CallbackQueryHandler(execute_buy_callback, pattern="^exec_buy$"))
     

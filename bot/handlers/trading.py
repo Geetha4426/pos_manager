@@ -365,6 +365,78 @@ async def sub_market_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
 
+async def refresh_prices_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Refresh live prices from CLOB and re-render market details."""
+    query = update.callback_query
+    await query.answer("🔄 Refreshing prices...")
+
+    sub = context.user_data.get('selected_sub_market')
+    event = context.user_data.get('selected_event')
+
+    if not sub:
+        await query.edit_message_text("⚠️ Market not found. Start over with /buy")
+        return
+
+    # Fetch live prices from CLOB
+    yes_price = sub.yes_price
+    no_price = sub.no_price
+    try:
+        client = get_polymarket_client()
+        if sub.yes_token_id:
+            live_yes = await client.get_price(sub.yes_token_id)
+            if live_yes > 0 and live_yes != 0.5:
+                yes_price = live_yes
+        if sub.no_token_id:
+            live_no = await client.get_price(sub.no_token_id)
+            if live_no > 0 and live_no != 0.5:
+                no_price = live_no
+    except Exception:
+        pass  # Keep cached prices as fallback
+
+    # Update cached prices on the sub object
+    sub.yes_price = yes_price
+    sub.no_price = no_price
+
+    # Get outcome labels
+    oe_yes = getattr(sub, 'outcome_yes', 'Yes')
+    oe_no = getattr(sub, 'outcome_no', 'No')
+
+    yes_prob = yes_price * 100
+    no_prob = no_price * 100
+
+    if oe_yes != 'Yes' and oe_no != 'No':
+        price_text = (
+            f"   🔵 {oe_yes}: {yes_prob:.0f}¢ (${yes_price:.2f})\n"
+            f"   🔴 {oe_no}: {no_prob:.0f}¢ (${no_price:.2f})"
+        )
+    else:
+        price_text = (
+            f"   ✅ YES: {yes_prob:.0f}¢ (${yes_price:.2f})\n"
+            f"   ❌ NO: {no_prob:.0f}¢ (${no_price:.2f})"
+        )
+
+    import datetime
+    now = datetime.datetime.now().strftime("%H:%M:%S")
+
+    text = (
+        f"📊 <b>Market Details</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📋 <b>{event.title if event else sub.question}</b>\n"
+        f"🎯 <b>{sub.group_item_title or sub.question}</b>\n\n"
+        f"💹 <b>Prices (LIVE):</b>\n"
+        f"{price_text}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🔄 <i>Updated at {now}</i>\n"
+        f"<b>Select your position:</b>"
+    )
+
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=outcome_keyboard(outcome_yes=oe_yes, outcome_no=oe_no)
+    )
+
+
 async def back_events_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Go back to events list."""
     query = update.callback_query

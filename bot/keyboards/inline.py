@@ -326,6 +326,7 @@ def outcome_keyboard(outcome_yes: str = "Yes", outcome_no: str = "No") -> Inline
             InlineKeyboardButton(f"{no_emoji} {outcome_no}", callback_data="out_no")
         ],
         [
+            InlineKeyboardButton("🔄 Refresh Prices", callback_data="refresh_prices"),
             InlineKeyboardButton("⭐ Save to Favorites", callback_data="fav_add"),
         ],
         [InlineKeyboardButton("◀️ Back", callback_data="back_sub")]
