@@ -588,6 +588,9 @@ async def confirm_sell_callback(update: Update, context: ContextTypes.DEFAULT_TY
         ])
     
     await query.edit_message_text(text, parse_mode='HTML', reply_markup=keyboard)
+
+
+async def custom_sell_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle custom sell percentage input."""
     try:
         percent = int(update.message.text.strip())
