@@ -2256,17 +2256,15 @@ class PolymarketClient:
                     
                     print(f"✅ FAK buy filled: {filled} shares @ {avg_price} (attempt {attempt+1})")
                     
-                    # If API says success but 0 shares filled, treat as failure
-                    if filled <= 0:
-                        print(f"⚠️ FAK success but 0 fill — treating as unfilled, trying next...")
-                        last_error = "FAK accepted but 0 shares filled"
-                    else:
-                        return OrderResult(
-                            success=True,
-                            order_id=str(order_id),
-                            filled_size=filled,
-                            avg_price=avg_price if avg_price else 0
-                        )
+                    # Trust API success flag — Polymarket FAK doesn't always
+                    # return fill details, but the order IS executed on-chain.
+                    # DO NOT retry on 0-fill — that causes double-buys!
+                    return OrderResult(
+                        success=True,
+                        order_id=str(order_id),
+                        filled_size=filled if filled else 0,
+                        avg_price=avg_price if avg_price else 0
+                    )
                 else:
                     last_error = resp.get('error', resp.get('errorMsg', 'FAK order failed')) if isinstance(resp, dict) else getattr(resp, 'error', getattr(resp, 'errorMsg', 'FAK order failed'))
                     print(f"⚠️ FAK buy attempt {attempt+1} failed: {last_error}")
