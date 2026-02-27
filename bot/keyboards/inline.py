@@ -12,91 +12,113 @@ from datetime import datetime
 
 
 def main_menu_keyboard() -> InlineKeyboardMarkup:
-    """Main menu buttons."""
+    """Main dashboard buttons — Trojan/BonkBot style."""
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("📊 Positions", callback_data="positions"),
             InlineKeyboardButton("💰 Balance", callback_data="balance")
         ],
         [
-            InlineKeyboardButton("🛒 Buy", callback_data="buy"),
+            InlineKeyboardButton("🛏 Buy", callback_data="buy"),
             InlineKeyboardButton("🔍 Search", callback_data="search")
         ],
         [
-            InlineKeyboardButton("⭐ Favorites", callback_data="favorites"),
-            InlineKeyboardButton("🔥 Hot", callback_data="hot")
+            InlineKeyboardButton("🔥 Trending", callback_data="hot"),
+            InlineKeyboardButton("⭐ Favorites", callback_data="favorites")
+        ],
+        [
+            InlineKeyboardButton("📋 Orders", callback_data="orders"),
+            InlineKeyboardButton("🔔 Alerts", callback_data="alerts")
+        ],
+        [
+            InlineKeyboardButton("🔓 Unlock", callback_data="auth_unlock"),
+            InlineKeyboardButton("🔒 Lock", callback_data="lock_session")
         ]
     ])
 
 
 def positions_keyboard(positions: List[Any]) -> InlineKeyboardMarkup:
-    """List of positions with instant sell buttons."""
+    """List of positions with instant sell buttons — sniper style."""
     buttons = []
     
     for idx, pos in enumerate(positions[:10]):
         pnl_emoji = "🟢" if pos.pnl >= 0 else "🔴"
-        pnl_str = f"+${pos.pnl:.1f}" if pos.pnl >= 0 else f"-${abs(pos.pnl):.1f}"
-        label = f"{pnl_emoji} {pos.market_question[:25]}.. {pnl_str}"
+        pnl_str = f"+${pos.pnl:.2f}" if pos.pnl >= 0 else f"-${abs(pos.pnl):.2f}"
+        # Compact: market name + PnL on one button, instant sell next to it
+        label = f"{pnl_emoji} {pos.market_question[:22]}.. {pnl_str}"
         buttons.append([
             InlineKeyboardButton(label, callback_data=f"pos_{idx}"),
-            InlineKeyboardButton("⚡SELL", callback_data=f"isell_{idx}_100")
+            InlineKeyboardButton("⚡ Sell", callback_data=f"isell_{idx}_100")
         ])
     
     buttons.append([
         InlineKeyboardButton("🔄 Refresh", callback_data="refresh_positions"),
-        InlineKeyboardButton("🔙 Menu", callback_data="menu")
+        InlineKeyboardButton("🏠 Menu", callback_data="menu")
     ])
     return InlineKeyboardMarkup(buttons)
 
 
 def position_detail_keyboard(pos_index: int) -> InlineKeyboardMarkup:
-    """Position detail with sell options."""
+    """Position detail with sell options — sniper style."""
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📤 Sell 25%", callback_data=f"sell_{pos_index}_25"),
-            InlineKeyboardButton("📤 Sell 50%", callback_data=f"sell_{pos_index}_50")
+            InlineKeyboardButton("⚡ 25%", callback_data=f"sell_{pos_index}_25"),
+            InlineKeyboardButton("⚡ 50%", callback_data=f"sell_{pos_index}_50"),
+            InlineKeyboardButton("⚡ 75%", callback_data=f"sell_{pos_index}_75"),
+            InlineKeyboardButton("⚡ 100%", callback_data=f"sell_{pos_index}_100")
         ],
         [
-            InlineKeyboardButton("📤 Sell 100%", callback_data=f"sell_{pos_index}_100"),
-            InlineKeyboardButton("✏️ Custom", callback_data=f"sell_{pos_index}_c")
+            InlineKeyboardButton("✏️ Custom %", callback_data=f"sell_{pos_index}_c")
         ],
-        [InlineKeyboardButton("🔙 Positions", callback_data="positions")]
+        [
+            InlineKeyboardButton("📉 Stop Loss", callback_data=f"sl_{pos_index}"),
+            InlineKeyboardButton("📈 Take Profit", callback_data=f"tp_{pos_index}")
+        ],
+        [
+            InlineKeyboardButton("🔄 Refresh", callback_data=f"pos_{pos_index}"),
+            InlineKeyboardButton("◀️ Back", callback_data="positions")
+        ]
     ])
 
 
 def sell_confirm_keyboard(pos_index: int, percent: int) -> InlineKeyboardMarkup:
-    """Sell confirmation."""
+    """Sell confirmation — prominent confirm button."""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Confirm Sell", callback_data=f"csell_{pos_index}_{percent}")],
+        [InlineKeyboardButton(f"⚡ CONFIRM SELL {percent}%", callback_data=f"csell_{pos_index}_{percent}")],
         [InlineKeyboardButton("❌ Cancel", callback_data=f"pos_{pos_index}")]
     ])
 
 
 def instant_sell_keyboard(pos_index: int) -> InlineKeyboardMarkup:
     """
-    Position detail with instant sell buttons.
-    One-click sell at 25%, 50%, or 100% — NO confirmation step.
+    Position detail with instant sell buttons — sniper style.
+    One-click sell at 25%, 50%, 75%, or 100% — NO confirmation step.
     """
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("⚡ SELL 100%", callback_data=f"isell_{pos_index}_100"),
         ],
         [
-            InlineKeyboardButton("⚡ 50%", callback_data=f"isell_{pos_index}_50"),
             InlineKeyboardButton("⚡ 25%", callback_data=f"isell_{pos_index}_25"),
+            InlineKeyboardButton("⚡ 50%", callback_data=f"isell_{pos_index}_50"),
+            InlineKeyboardButton("⚡ 75%", callback_data=f"isell_{pos_index}_75"),
         ],
         [
-            InlineKeyboardButton("📤 Custom %", callback_data=f"sell_{pos_index}_c"),
+            InlineKeyboardButton("✏️ Custom %", callback_data=f"sell_{pos_index}_c"),
+        ],
+        [
+            InlineKeyboardButton("📉 SL", callback_data=f"sl_{pos_index}"),
+            InlineKeyboardButton("📈 TP", callback_data=f"tp_{pos_index}"),
         ],
         [
             InlineKeyboardButton("🔄 Refresh", callback_data=f"pos_{pos_index}"),
-            InlineKeyboardButton("🔙 Positions", callback_data="positions"),
+            InlineKeyboardButton("◀️ Back", callback_data="positions"),
         ]
     ])
 
 
 def category_keyboard() -> InlineKeyboardMarkup:
-    """Category selection."""
+    """Category selection — sniper style."""
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🏆 Sports", callback_data="cat_sports")],
         [
@@ -104,10 +126,10 @@ def category_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("₿ Crypto", callback_data="cat_crypto")
         ],
         [
-            InlineKeyboardButton("🎬 Entertainment", callback_data="cat_ent"),
+            InlineKeyboardButton("🎬 Pop Culture", callback_data="cat_ent"),
             InlineKeyboardButton("📈 Finance", callback_data="cat_finance")
         ],
-        [InlineKeyboardButton("🔙 Menu", callback_data="menu")]
+        [InlineKeyboardButton("◀️ Back", callback_data="menu")]
     ])
 
 
@@ -290,8 +312,8 @@ def sub_markets_keyboard(sub_markets: List[Any], event_idx: int) -> InlineKeyboa
 
 
 def outcome_keyboard(outcome_yes: str = "Yes", outcome_no: str = "No") -> InlineKeyboardMarkup:
-    """Outcome selection - shows actual team names or Yes/No."""
-    yes_emoji = "✅" if outcome_yes == "Yes" else "🔵"
+    """Outcome selection — shows team names or Yes/No."""
+    yes_emoji = "✅" if outcome_yes == "Yes" else "🟢"
     no_emoji = "❌" if outcome_no == "No" else "🔴"
     
     return InlineKeyboardMarkup([
@@ -299,13 +321,15 @@ def outcome_keyboard(outcome_yes: str = "Yes", outcome_no: str = "No") -> Inline
             InlineKeyboardButton(f"{yes_emoji} {outcome_yes}", callback_data="out_yes"),
             InlineKeyboardButton(f"{no_emoji} {outcome_no}", callback_data="out_no")
         ],
-        [InlineKeyboardButton("⭐ Add Favorite", callback_data="fav_add")],
-        [InlineKeyboardButton("🔙 Back", callback_data="back_sub")]
+        [
+            InlineKeyboardButton("⭐ Save to Favorites", callback_data="fav_add"),
+        ],
+        [InlineKeyboardButton("◀️ Back", callback_data="back_sub")]
     ])
 
 
 def amount_keyboard() -> InlineKeyboardMarkup:
-    """Amount selection."""
+    """Amount selection — sniper style quick amounts."""
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("$1", callback_data="amt_1"),
@@ -319,14 +343,14 @@ def amount_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("$100", callback_data="amt_100"),
             InlineKeyboardButton("✏️ Custom", callback_data="amt_custom")
         ],
-        [InlineKeyboardButton("🔙 Back", callback_data="back_out")]
+        [InlineKeyboardButton("◀️ Back", callback_data="back_out")]
     ])
 
 
 def buy_confirm_keyboard() -> InlineKeyboardMarkup:
-    """Buy confirmation."""
+    """Buy confirmation — prominent execute button."""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚡ Execute Buy", callback_data="exec_buy")],
+        [InlineKeyboardButton("⚡ EXECUTE BUY", callback_data="exec_buy")],
         [InlineKeyboardButton("❌ Cancel", callback_data="buy")]
     ])
 

@@ -116,8 +116,10 @@ class UserSession:
     
     @property
     def is_expired(self) -> bool:
-        """Session expires after configured timeout of inactivity."""
-        timeout = Config.SESSION_TIMEOUT if hasattr(Config, 'SESSION_TIMEOUT') else 1800
+        """Session expires after configured timeout of inactivity. 0 = never expire."""
+        timeout = Config.SESSION_TIMEOUT if hasattr(Config, 'SESSION_TIMEOUT') else 0
+        if timeout <= 0:
+            return False  # Permanent session
         return (time.time() - self.last_activity) > timeout
     
     def touch(self):
@@ -137,8 +139,10 @@ class UserManager:
     2. Key encrypted with password, stored in DB
     3. User sends /unlock <password> → key decrypted, ClobClient created
     4. User trades normally (session active)
-    5. Session auto-expires after 30 min inactivity
+    5. Sessions are permanent by default (SESSION_TIMEOUT=0)
     6. User sends /lock → session destroyed immediately
+    
+    Bot owner auto-unlocks from env vars on startup.
     """
     
     def __init__(self):
@@ -392,6 +396,83 @@ class UserManager:
             self.lock_session(tid)
         if expired:
             print(f"🔒 Auto-locked {len(expired)} expired sessions")
+
+    async def auto_unlock_from_env(self):
+        """
+        Auto-register and unlock the bot owner from Railway env vars.
+        
+        If POLYGON_PRIVATE_KEY and TELEGRAM_CHAT_ID are set in env,
+        the owner gets an always-on session without /connect or /unlock.
+        This survives Railway redeploys (no DB needed for the owner).
+        """
+        private_key = Config.POLYGON_PRIVATE_KEY
+        chat_id_str = Config.TELEGRAM_CHAT_ID
+        
+        if not private_key or not chat_id_str:
+            return  # Not configured for auto-unlock
+        
+        try:
+            owner_id = int(chat_id_str)
+        except (ValueError, TypeError):
+            print(f"⚠️ Auto-unlock: TELEGRAM_CHAT_ID '{chat_id_str}' is not a valid integer")
+            return
+        
+        # Already unlocked?
+        if owner_id in self._sessions and not self._sessions[owner_id].is_expired:
+            print(f"✅ Auto-unlock: Owner {owner_id} already has active session")
+            return
+        
+        funder = Config.FUNDER_ADDRESS or None
+        sig_type = Config.SIGNATURE_TYPE  # Default 2 (GnosisSafe)
+        
+        try:
+            if not CLOB_AVAILABLE:
+                print("⚠️ Auto-unlock: py_clob_client not available")
+                return
+            
+            clob_url = Config.get_clob_url()
+            
+            clob_client = ClobClient(
+                clob_url,
+                key=private_key,
+                chain_id=Config.POLYGON_CHAIN_ID,
+                signature_type=sig_type,
+                funder=funder
+            )
+            
+            # Inject relay auth if needed
+            if Config.is_relay_enabled() and Config.CLOB_RELAY_AUTH_TOKEN:
+                try:
+                    session = getattr(clob_client, 'session', None)
+                    if session and hasattr(session, 'headers'):
+                        session.headers['Authorization'] = f'Bearer {Config.CLOB_RELAY_AUTH_TOKEN}'
+                except Exception:
+                    pass
+            
+            clob_client.set_api_creds(clob_client.create_or_derive_api_creds())
+            
+            # Create permanent session
+            session = UserSession(
+                telegram_id=owner_id,
+                funder_address=funder or clob_client.get_address(),
+                clob_client=clob_client,
+                last_activity=time.time(),
+                session_start=time.time(),
+                display_name="Owner (env)",
+                signature_type=sig_type
+            )
+            
+            self._sessions[owner_id] = session
+            
+            addr = session.funder_address
+            print(f"🔓 Auto-unlock: Owner {owner_id} session created")
+            print(f"   Wallet: {addr[:8]}...{addr[-4:]}")
+            print(f"   sig_type={sig_type}, funder={'yes' if funder else 'no'}")
+            
+        except Exception as e:
+            print(f"❌ Auto-unlock failed: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 # ═══════════════════════════════════════════════════════════════════

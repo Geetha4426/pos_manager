@@ -12,7 +12,7 @@ Features:
 import asyncio
 import logging
 import warnings
-from telegram import Update
+from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, 
     CommandHandler, 
@@ -36,7 +36,11 @@ from bot.keyboards.inline import main_menu_keyboard
 from bot.handlers.positions import (
     positions_command, position_detail_callback, sell_callback,
     confirm_sell_callback, custom_sell_input, CUSTOM_SELL_PERCENT,
-    instant_sell_callback, refresh_positions_callback
+    instant_sell_callback, refresh_positions_callback,
+    stop_loss_callback, take_profit_callback,
+    sl_set_callback, tp_set_callback,
+    stop_loss_price_input, take_profit_price_input,
+    STOP_LOSS_PRICE, TAKE_PROFIT_PRICE
 )
 from bot.handlers.trading import (
     buy_command, category_callback, sport_callback, league_callback,
@@ -77,98 +81,109 @@ logger = logging.getLogger(__name__)
 
 
 async def start_command(update: Update, context):
-    """Handle /start command - welcome message."""
+    """Handle /start command - main dashboard like Trojan/BonkBot."""
     user = update.effective_user
-    mode = "📝 Paper Trading" if Config.is_paper_mode() else "💱 Live Trading"
-    instant = "✅ ON" if Config.USE_INSTANT_SELL else "❌ OFF"
+    
+    # Check wallet status
+    wallet_status = "🔴 Not Connected"
+    wallet_addr = ""
+    try:
+        from core.user_manager import get_user_manager
+        um = get_user_manager()
+        if await um.is_registered(user.id):
+            session = um.get_session(user.id)
+            if session:
+                addr = session.funder_address
+                wallet_status = f"🟢 Active"
+                wallet_addr = f"\n   <code>{addr[:6]}...{addr[-4:]}</code>"
+            else:
+                wallet_status = "🔒 Locked — /unlock"
+    except Exception:
+        pass
+    
+    mode = "PAPER 📝" if Config.is_paper_mode() else "LIVE 🔴"
     
     text = (
-        f"🚀 <b>Polymarket Sniper Bot</b>\n\n"
-        f"Welcome, {user.first_name}! ⚡\n\n"
-        f"<b>Mode:</b> {mode}\n"
-        f"<b>Instant Sell:</b> {instant}\n\n"
-        f"<b>🔐 Wallet:</b>\n"
-        f"🔗 /connect - Link your wallet\n"
-        f"🔓 /unlock - Unlock to trade\n"
-        f"🔒 /lock - Lock session\n"
-        f"📋 /mystatus - Session info\n\n"
-        f"<b>📊 Trading:</b>\n"
-        f"📊 /positions - View positions (live P&L)\n"
-        f"💰 /balance - Wallet overview\n"
-        f"🛒 /buy - Buy new position\n"
-        f"🔍 /search - Search markets\n"
-        f"⭐ /favorites - Saved markets\n"
-        f"🔥 /hot - Trending markets\n\n"
-        f"<i>⚡ One-click instant sell • Live bid/ask prices</i>"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"⚡ <b>POLYMARKET SNIPER</b> ⚡\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👤 {user.first_name} │ {mode}\n"
+        f"👛 {wallet_status}{wallet_addr}\n\n"
+        f"━━━ <b>Quick Actions</b> ━━━━━━━━━━━━\n\n"
+        f"🛒 <b>/buy</b> — Open new position\n"
+        f"📊 <b>/positions</b> — Manage & sell\n"
+        f"💰 <b>/balance</b> — Portfolio overview\n"
+        f"🔍 <b>/search</b> — Find markets\n"
+        f"🔥 <b>/hot</b> — Trending now\n\n"
+        f"━━━ <b>Wallet</b> ━━━━━━━━━━━━━━━━━\n\n"
+        f"🔗 <b>/connect</b> — Link your key\n"
+        f"🔓 <b>/unlock</b> — Start session\n"
+        f"🔒 <b>/lock</b> — End session\n\n"
+        f"<i>⚡ Instant sell • SL/TP auto-execute\n"
+        f"🔐 AES-256-GCM encrypted keys</i>"
     )
     
-    await update.message.reply_text(
-        text,
-        parse_mode='HTML',
-        reply_markup=main_menu_keyboard()
-    )
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            text,
+            parse_mode='HTML',
+            reply_markup=main_menu_keyboard()
+        )
+    else:
+        await update.message.reply_text(
+            text,
+            parse_mode='HTML',
+            reply_markup=main_menu_keyboard()
+        )
 
 
 async def help_command(update: Update, context):
     """Handle /help command."""
-    text = """
-📖 <b>Bot Commands</b>
-
-<b>🔐 Wallet:</b>
-/connect - Link your wallet (encrypted)
-/unlock - Start trading session
-/lock - End session (clear from memory)
-/disconnect - Remove wallet permanently
-/mystatus - Session & wallet info
-
-<b>Trading:</b>
-/buy - Start buy flow with categories
-/search <query> - Search markets
-/info <query> - Market details
-
-<b>Positions:</b>
-/positions - View all positions
-/balance - Wallet balance
-
-<b>Favorites:</b>
-/favorites - Saved markets
-
-<b>Discovery:</b>
-/hot - Trending markets
-
-<b>Settings:</b>
-/start - Main menu
-/help - This help
-
-<b>Tips:</b>
-• Use /connect first, then /unlock to start trading
-• Sessions auto-lock after 30 min of inactivity
-• Your private key is AES-256-GCM encrypted
-"""
+    text = (
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "❓ <b>COMMANDS</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "━━━ <b>Trading</b> ━━━━━━━━━━━━━━━\n"
+        "/buy — Browse & buy markets\n"
+        "/search — Search by keyword\n"
+        "/info — Market details\n"
+        "/hot — Trending markets\n\n"
+        "━━━ <b>Portfolio</b> ━━━━━━━━━━━━━━\n"
+        "/positions — View & sell positions\n"
+        "/balance — Wallet & P&L\n"
+        "/orders — Open orders\n"
+        "/alerts — SL/TP & price alerts\n\n"
+        "━━━ <b>Wallet</b> ━━━━━━━━━━━━━━━━\n"
+        "/connect — Link wallet (encrypted)\n"
+        "/unlock — Start trading session\n"
+        "/lock — End session\n"
+        "/disconnect — Remove wallet\n"
+        "/mystatus — Session status\n\n"
+        "━━━ <b>Other</b> ━━━━━━━━━━━━━━━━━\n"
+        "/favorites — Saved markets\n"
+        "/start — Main dashboard\n"
+        "/help — This list\n\n"
+        "━━━ <b>How It Works</b> ━━━━━━━━━━\n"
+        "1️⃣ /connect → send private key\n"
+        "2️⃣ Set encryption password\n"
+        "3️⃣ Add funder (proxy) address\n"
+        "4️⃣ /unlock → enter password\n"
+        "5️⃣ Trade! Sessions are permanent\n\n"
+        "<i>🔐 Key is AES-256-GCM encrypted\n"
+        "🗑️ Messages auto-deleted\n"
+        "⚡ One-click instant sell\n"
+        "📉📈 Stop Loss / Take Profit</i>"
+    )
     
     await update.message.reply_text(text, parse_mode='HTML')
 
 
 async def menu_callback(update: Update, context):
-    """Handle menu button - return to main menu."""
+    """Handle menu button - return to main dashboard."""
     query = update.callback_query
     await query.answer()
-    
-    mode = "📝 Paper Trading" if Config.is_paper_mode() else "💱 LIVE Trading"
-    
-    text = f"""
-🚀 <b>Polymarket Sniper Bot</b>
-
-<b>Mode:</b> {mode}
-
-Select an option below:
-"""
-    
-    await query.edit_message_text(
-        text,
-        parse_mode='HTML',
-        reply_markup=main_menu_keyboard()
-    )
+    # Reuse start_command logic
+    await start_command(update, context)
 
 
 async def error_handler(update: object, context) -> None:
@@ -228,6 +243,36 @@ def main():
         import time as _time
         t0 = _time.time()
         
+        # 0. Delete any existing webhook to avoid 409 Conflict
+        try:
+            await application.bot.delete_webhook(drop_pending_updates=True)
+            print("✅ Webhook cleared, polling mode active")
+        except Exception as e:
+            print(f"⚠️ Webhook cleanup failed: {e}")
+        
+        # 0.5 Register bot commands menu (shows in Telegram's / command picker)
+        try:
+            commands = [
+                BotCommand("start", "🏠 Main dashboard"),
+                BotCommand("buy", "🛒 Buy a position"),
+                BotCommand("positions", "📊 View & sell positions"),
+                BotCommand("balance", "💰 Wallet & portfolio"),
+                BotCommand("search", "🔍 Search markets"),
+                BotCommand("hot", "🔥 Trending markets"),
+                BotCommand("favorites", "⭐ Saved markets"),
+                BotCommand("orders", "📋 Open orders"),
+                BotCommand("alerts", "🔔 Price alerts & SL/TP"),
+                BotCommand("connect", "🔗 Link wallet"),
+                BotCommand("unlock", "🔓 Unlock trading session"),
+                BotCommand("lock", "🔒 Lock session"),
+                BotCommand("mystatus", "📋 Session info"),
+                BotCommand("help", "❓ All commands"),
+            ]
+            await application.bot.set_my_commands(commands)
+            print("✅ Bot commands menu registered")
+        except Exception as e:
+            print(f"⚠️ Failed to set bot commands: {e}")
+        
         # 1. Initialize Polymarket client (+ load paper positions)
         t1 = _time.time()
         await init_polymarket_client()
@@ -259,7 +304,7 @@ def main():
             user_count = await um.get_user_count()
             print(f"👥 User manager initialized ({user_count} registered users)")
             
-            # Periodic session cleanup (every 5 minutes)
+            # Periodic session cleanup (every 5 minutes) — skips permanent sessions
             async def _session_cleanup_loop():
                 while True:
                     await asyncio.sleep(300)
@@ -354,6 +399,54 @@ def main():
     )
     app.add_handler(custom_sell_handler)
     
+    # ConversationHandler for Stop Loss (from position detail)
+    stop_loss_handler = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(stop_loss_callback, pattern=r"^sl_\d+$")
+        ],
+        states={
+            STOP_LOSS_PRICE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, stop_loss_price_input),
+                CallbackQueryHandler(sl_set_callback, pattern=r"^slset_\d+_\d+$"),
+            ]
+        },
+        fallbacks=[
+            CommandHandler("positions", positions_command),
+            CommandHandler("start", start_command),
+            CommandHandler("cancel", start_command),
+            CallbackQueryHandler(menu_callback, pattern="^menu$"),
+            CallbackQueryHandler(position_detail_callback, pattern=r"^pos_\d+$"),
+        ],
+        name="stop_loss_conversation",
+        persistent=False,
+        per_message=False
+    )
+    app.add_handler(stop_loss_handler)
+    
+    # ConversationHandler for Take Profit (from position detail)
+    take_profit_handler = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(take_profit_callback, pattern=r"^tp_\d+$")
+        ],
+        states={
+            TAKE_PROFIT_PRICE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, take_profit_price_input),
+                CallbackQueryHandler(tp_set_callback, pattern=r"^tpset_\d+_\d+$"),
+            ]
+        },
+        fallbacks=[
+            CommandHandler("positions", positions_command),
+            CommandHandler("start", start_command),
+            CommandHandler("cancel", start_command),
+            CallbackQueryHandler(menu_callback, pattern="^menu$"),
+            CallbackQueryHandler(position_detail_callback, pattern=r"^pos_\d+$"),
+        ],
+        name="take_profit_conversation",
+        persistent=False,
+        per_message=False
+    )
+    app.add_handler(take_profit_handler)
+    
     # ConversationHandler for inline search button
     search_conv_handler = ConversationHandler(
         entry_points=[
@@ -388,6 +481,35 @@ def main():
     # Note: search$ is now handled by ConversationHandler above
     app.add_handler(CallbackQueryHandler(favorites_callback, pattern="^favorites$"))
     app.add_handler(CallbackQueryHandler(hot_callback, pattern="^hot$"))
+    app.add_handler(CallbackQueryHandler(orders_callback, pattern="^orders$"))
+    app.add_handler(CallbackQueryHandler(alerts_callback, pattern="^alerts$"))
+    
+    # Lock session from inline button
+    async def lock_session_callback(update: Update, context):
+        query = update.callback_query
+        await query.answer()
+        from core.user_manager import get_user_manager
+        um = get_user_manager()
+        user_id = update.effective_user.id
+        if um.lock_session(user_id):
+            await query.edit_message_text(
+                "🔒 <b>Session Locked</b>\n\n"
+                "Decrypted key cleared from memory.\n"
+                "Use /unlock to resume trading.",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔓 Unlock", callback_data="auth_unlock")],
+                    [InlineKeyboardButton("🏠 Menu", callback_data="menu")]
+                ])
+            )
+        else:
+            await query.edit_message_text(
+                "ℹ️ No active session to lock.\nUse /connect to link your wallet.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🏠 Menu", callback_data="menu")]
+                ])
+            )
+    app.add_handler(CallbackQueryHandler(lock_session_callback, pattern="^lock_session$"))
     
     # Position handlers (non-custom - custom is handled by ConversationHandler above)
     app.add_handler(CallbackQueryHandler(position_detail_callback, pattern=r"^pos_\d+$"))
@@ -396,6 +518,10 @@ def main():
     
     # Instant sell - ONE CLICK, NO CONFIRMATION
     app.add_handler(CallbackQueryHandler(instant_sell_callback, pattern=r"^isell_\d+_\d+$"))
+    
+    # Stop loss / Take profit quick set (standalone, outside conversation)
+    app.add_handler(CallbackQueryHandler(sl_set_callback, pattern=r"^slset_\d+_\d+$"))
+    app.add_handler(CallbackQueryHandler(tp_set_callback, pattern=r"^tpset_\d+_\d+$"))
     
     # Refresh positions
     app.add_handler(CallbackQueryHandler(refresh_positions_callback, pattern="^refresh_positions$"))
@@ -432,13 +558,11 @@ def main():
     app.add_handler(CallbackQueryHandler(fav_del_callback, pattern=r"^fd_\d+$"))
     
     # Orders handlers (cancel_all MUST be before cancel_ to avoid pattern shadowing)
-    app.add_handler(CallbackQueryHandler(orders_callback, pattern="^orders$"))
     app.add_handler(CallbackQueryHandler(order_book_callback, pattern="^orderbook$"))
     app.add_handler(CallbackQueryHandler(cancel_all_callback, pattern="^cancel_all$"))
     app.add_handler(CallbackQueryHandler(cancel_order_callback, pattern="^cancel_"))
     
     # Alerts handlers
-    app.add_handler(CallbackQueryHandler(alerts_callback, pattern="^alerts$"))
     app.add_handler(CallbackQueryHandler(delete_alert_callback, pattern="^del_alert_"))
     
     # Error handler
@@ -452,13 +576,6 @@ def main():
     print("� Multi-user: /connect → /unlock → trade")
     print("�📊 Sports flow: Sport → Events → Sub-Markets → Yes/No")
     print("Press Ctrl+C to stop.\n")
-        # Delete any existing webhook and drop pending updates to avoid 409 Conflict
-    # This ensures only this instance polls for updates
-    async def post_init(application):
-        await application.bot.delete_webhook(drop_pending_updates=True)
-        print("✅ Webhook cleared, polling mode active")
-    
-    app.post_init = post_init
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 

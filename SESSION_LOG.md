@@ -96,19 +96,28 @@ a2956d0 Fix signature diagnostics, auto-detect sig_type
 b71ecd4 Add CLOB relay for geo-block bypass + fix MarketOrderArgs (WORKING STATE)
 ```
 
-## Current Status (Feb 26, 2026)
+## Current Status (Feb 27, 2026)
 - ✅ All buy/sell orders working (sig_type=2, confirmed via /test_sign POST 200)
 - ✅ On-chain diagnostics in /test_sign
 - ✅ Allowance sync before buy/sell
 - ✅ Multi-user encrypted wallet management
 - ✅ CLOB relay for geo-block bypass
 - ✅ Deployed on Railway
+- ✅ Permanent sessions (no 30min timeout)
+- ✅ Auto-unlock bot owner from env vars (no /connect or /unlock needed)
+- ✅ Sell buttons: 25%, 50%, 75%, 100%, Custom
+- ✅ Stop Loss / Take Profit buttons on position detail
+- ✅ Auto-sell execution when SL/TP triggers via WS price monitor
+- ✅ Fixed dual post_init bug (init code was being overwritten)
 
 ## Known Limitations
-- Session timeout: 30 min inactivity → need /unlock again
-- Railway redeploy clears in-memory sessions → need /unlock
+- Railway redeploy clears SQLite DB (encrypted keys) for non-owner users
+  - Workaround: Owner auto-unlocks from env vars (POLYGON_PRIVATE_KEY + TELEGRAM_CHAT_ID)
+  - Other users need to /connect again after redeploy
+  - For persistence: use Railway Volume mount for data/ directory
 - Operator approval (isApprovedForAll) NOT set → sig_type=1 won't work
 - USDC only on proxy wallet ($3.39), EOA has $0
+- SL/TP auto-execution requires WS price feed to be connected and session unlocked
 
 ## Polymarket Technical Notes
 - py-clob-client v0.34.6

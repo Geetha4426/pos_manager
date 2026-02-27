@@ -28,11 +28,11 @@ CUSTOM_AMOUNT = 0
 
 async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /buy command - start buy flow."""
-    text = """
-🛒 <b>Buy Position</b>
-
-Select a category to browse markets:
-"""
+    text = (
+        "🛒 <b>Buy Position</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "Select a category to browse:"
+    )
     
     if update.callback_query:
         await update.callback_query.edit_message_text(
@@ -57,11 +57,11 @@ async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['category'] = category
     
     if category == 'sports':
-        text = """
-🏆 <b>Select Sport</b>
-
-Choose a sport to see available matches:
-"""
+        text = (
+            "🏆 <b>Select Sport</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Choose a sport to see matches:"
+        )
         await query.edit_message_text(
             text,
             parse_mode='HTML',
@@ -81,11 +81,11 @@ Choose a sport to see available matches:
             )
             return
         
-        text = f"""
-📊 <b>{category.title()} Markets</b>
-
-Found {len(markets)} markets:
-"""
+        text = (
+            f"📊 <b>{category.title()} Markets</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Found {len(markets)} markets:"
+        )
         await query.edit_message_text(
             text,
             parse_mode='HTML',
@@ -110,13 +110,12 @@ async def sport_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if leagues:
         # Show league selection
-        text = f"""
-{sport_emoji} <b>{sport.upper()} Leagues</b>
-
-Found {len(leagues)} leagues/tournaments:
-
-<i>Select a league to see matches, or view all events:</i>
-"""
+        text = (
+            f"{sport_emoji} <b>{sport.upper()} Leagues</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Found {len(leagues)} leagues/tournaments:\n\n"
+            f"<i>Select a league to see matches:</i>"
+        )
         await query.edit_message_text(
             text,
             parse_mode='HTML',
@@ -143,14 +142,13 @@ Found {len(leagues)} leagues/tournaments:
         if upcoming_count:
             status_line += f"🟢 {upcoming_count} upcoming"
         
-        text = f"""
-{sport_emoji} <b>{sport.upper()} Events</b>
-
-Found {len(events)} active matches/events:
-{status_line}
-
-<i>Tap an event to see betting options</i>
-"""
+        text = (
+            f"{sport_emoji} <b>{sport.upper()} Events</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"{len(events)} active matches\n"
+            f"{status_line}\n\n"
+            f"<i>Tap an event to see betting options</i>"
+        )
         await query.edit_message_text(
             text,
             parse_mode='HTML',
@@ -211,14 +209,13 @@ async def league_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if upcoming_count:
         status_line += f"🟢 {upcoming_count} upcoming"
     
-    text = f"""
-{sport_emoji} <b>{league_name}</b>
-
-Found {len(events)} active matches:
-{status_line}
-
-<i>Tap an event to see betting options</i>
-"""
+    text = (
+        f"{sport_emoji} <b>{league_name}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"{len(events)} active matches\n"
+        f"{status_line}\n\n"
+        f"<i>Tap an event to see betting options</i>"
+    )
     
     await query.edit_message_text(
         text,
@@ -237,11 +234,11 @@ async def events_page_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     sport = context.user_data.get('sport', 'sports')
     sport_emoji = Config.get_sport_emoji(sport)
     
-    text = f"""
-{sport_emoji} <b>{sport.upper()} Events</b>
-
-Found {len(events)} active matches (Page {page + 1}):
-"""
+    text = (
+        f"{sport_emoji} <b>{sport.upper()} Events</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"{len(events)} matches (Page {page + 1}):"
+    )
     
     await query.edit_message_text(
         text,
@@ -289,14 +286,13 @@ async def event_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         timing = ""
     
-    text = f"""
-📊 <b>{event.title}</b>
-{timing}
-
-<b>Available Betting Options ({len(sub_markets)}):</b>
-
-<i>Select a market to trade:</i>
-"""
+    text = (
+        f"📊 <b>{event.title}</b>\n"
+        f"{timing}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"<b>Betting Options ({len(sub_markets)}):</b>\n\n"
+        f"<i>Select a market to trade:</i>"
+    )
     
     await query.edit_message_text(
         text,
@@ -351,17 +347,16 @@ async def sub_market_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"   ❌ NO: {no_prob:.0f}¢ (${sub.no_price:.2f})"
         )
     
-    text = f"""
-📊 <b>Market Details</b>
-
-📋 <b>{event.title}</b>
-🎯 <b>{sub.group_item_title or sub.question}</b>
-
-💹 <b>Prices:</b>
-{price_text}
-
-<b>Select your position:</b>
-"""
+    text = (
+        f"📊 <b>Market Details</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📋 <b>{event.title}</b>\n"
+        f"🎯 <b>{sub.group_item_title or sub.question}</b>\n\n"
+        f"💹 <b>Prices:</b>\n"
+        f"{price_text}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"<b>Select your position:</b>"
+    )
     
     await query.edit_message_text(
         text,
@@ -379,11 +374,11 @@ async def back_events_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     sport = context.user_data.get('sport', 'sports')
     sport_emoji = Config.get_sport_emoji(sport)
     
-    text = f"""
-{sport_emoji} <b>{sport.upper()} Events</b>
-
-Found {len(events)} active matches:
-"""
+    text = (
+        f"{sport_emoji} <b>{sport.upper()} Events</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"{len(events)} active matches:"
+    )
     
     await query.edit_message_text(
         text,
@@ -404,11 +399,11 @@ async def back_sub_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await back_events_callback(update, context)
         return
     
-    text = f"""
-📊 <b>{event.title}</b>
-
-<b>Available Betting Options:</b>
-"""
+    text = (
+        f"📊 <b>{event.title}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"<b>Betting Options:</b>"
+    )
     
     await query.edit_message_text(
         text,
@@ -463,15 +458,15 @@ async def outcome_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     event = context.user_data.get('selected_event')
     event_title = event.title if event else sub.question
     
-    text = f"""
-💵 <b>Enter Amount</b>
-
-📋 {event_title}
-🎯 <b>{sub.group_item_title or sub.question}</b>
-📍 <b>Buying:</b> {outcome_label} @ ${price:.2f}
-
-<b>Select amount (USD):</b>
-"""
+    text = (
+        f"💵 <b>Enter Amount</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📋 {event_title}\n"
+        f"🎯 <b>{sub.group_item_title or sub.question}</b>\n"
+        f"📍 Buying: {outcome_label} @ ${price:.2f}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"<b>Select amount (USD):</b>"
+    )
     
     await query.edit_message_text(
         text,
@@ -510,17 +505,16 @@ async def back_out_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"   ❌ NO: {no_prob:.0f}¢"
         )
     
-    text = f"""
-📊 <b>Market Details</b>
-
-📋 <b>{event_title}</b>
-🎯 <b>{sub.group_item_title or sub.question}</b>
-
-💹 <b>Prices:</b>
-{price_text}
-
-<b>Select your position:</b>
-"""
+    text = (
+        f"📊 <b>Market Details</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📋 <b>{event_title}</b>\n"
+        f"🎯 <b>{sub.group_item_title or sub.question}</b>\n\n"
+        f"💹 <b>Prices:</b>\n"
+        f"{price_text}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"<b>Select your position:</b>"
+    )
     
     await query.edit_message_text(
         text,
@@ -565,21 +559,19 @@ async def show_buy_confirmation(query, context, amount: float):
     mode_text = "📝 PAPER" if Config.is_paper_mode() else "💱 LIVE"
     event_title = event.title if event else sub.question
     
-    text = f"""
-🚀 <b>Confirm Buy Order</b>
-
-📋 <b>{event_title}</b>
-🎯 <b>{sub.group_item_title or sub.question}</b>
-
-📍 <b>Outcome:</b> {outcome}
-💵 <b>Price:</b> ${price:.4f}
-💰 <b>Amount:</b> ${amount:.2f}
-📦 <b>Est. Shares:</b> {est_shares:.2f}
-
-<b>Mode:</b> {mode_text}
-
-<i>🔥 Market order = instant execution</i>
-"""
+    text = (
+        f"⚡ <b>Confirm Buy</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📋 <b>{event_title}</b>\n"
+        f"🎯 <b>{sub.group_item_title or sub.question}</b>\n\n"
+        f"Outcome   {outcome}\n"
+        f"Price     ${price:.4f}\n"
+        f"Amount    ${amount:.2f}\n"
+        f"Shares    ~{est_shares:.2f}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"Mode: {mode_text}\n\n"
+        f"<i>🔥 Market order = instant execution</i>"
+    )
     
     await query.edit_message_text(
         text,
@@ -635,15 +627,16 @@ async def execute_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             pass
         
         text = (
-            f"✅ <b>Buy Executed!</b>\n\n"
+            f"✅ <b>Buy Executed!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
             f"📋 {event_title}\n"
             f"🎯 {sub_title}\n"
-            f"📍 <b>Outcome:</b> {outcome}\n\n"
-            f"📦 <b>Shares:</b> {result.filled_size:.2f}\n"
-            f"💵 <b>Avg Price:</b> {result.avg_price*100:.1f}¢\n"
-            f"🆔 <code>{result.order_id[:16]}...</code>\n\n"
-            f"{'📝 Paper trade' if Config.is_paper_mode() else '💱 Live trade'}\n\n"
-            f"Use /positions to view (live P&L) ⚡"
+            f"📍 {outcome}\n\n"
+            f"📦 {result.filled_size:.2f} shares @ {result.avg_price*100:.1f}¢\n"
+            f"🆔 <code>{result.order_id[:16]}...</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"<i>{'📝 Paper trade' if Config.is_paper_mode() else '💱 Live trade'}</i>\n\n"
+            f"/positions → view live P&L"
         )
     else:
         error_msg = result.error or 'Unknown error'
@@ -684,13 +677,12 @@ async def execute_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 "Use /debug_wallet for full config info."
             )
         else:
-            text = f"""
-❌ <b>Buy Failed</b>
-
-Error: {error_msg}
-
-Please try again.
-"""
+            text = (
+                f"❌ <b>Buy Failed</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"Error: {error_msg}\n\n"
+                f"Please try again."
+            )
     
     await query.edit_message_text(text, parse_mode='HTML')
 
@@ -746,18 +738,16 @@ async def market_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"   ❌ NO: {no_prob:.0f}¢ (${market.no_price:.2f})"
         )
     
-    text = f"""
-📊 <b>Market Details</b>
-
-📋 <b>{market.question}</b>
-
-💹 <b>Prices:</b>
-{price_text}
-
-📈 <b>Volume:</b> ${market.volume:,.0f}
-
-<b>Select your position:</b>
-"""
+    text = (
+        f"📊 <b>Market Details</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📋 <b>{market.question}</b>\n\n"
+        f"💹 <b>Prices:</b>\n"
+        f"{price_text}\n\n"
+        f"📈 Volume: ${market.volume:,.0f}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"<b>Select your position:</b>"
+    )
     
     await query.edit_message_text(
         text,
@@ -824,19 +814,18 @@ async def custom_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         event_title = event.title if event else (sub.question if sub else 'Unknown')
         sub_title = sub.group_item_title or sub.question if sub else ''
         
-        text = f"""
-🚀 <b>Confirm Buy Order</b>
-
-📋 <b>{event_title}</b>
-🎯 <b>{sub_title}</b>
-
-📍 <b>Outcome:</b> {outcome}
-💵 <b>Price:</b> ${price:.4f}
-💰 <b>Amount:</b> ${amount:.2f}
-📦 <b>Est. Shares:</b> {est_shares:.2f}
-
-<b>Mode:</b> {mode_text}
-"""
+        text = (
+            f"⚡ <b>Confirm Buy</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📋 <b>{event_title}</b>\n"
+            f"🎯 <b>{sub_title}</b>\n\n"
+            f"Outcome   {outcome}\n"
+            f"Price     ${price:.4f}\n"
+            f"Amount    ${amount:.2f}\n"
+            f"Shares    ~{est_shares:.2f}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Mode: {mode_text}"
+        )
         
         await update.message.reply_text(
             text,

@@ -796,13 +796,13 @@ class PolymarketClient:
         if self.is_paper or not self.clob_client:
             return self._get_paper_positions()
         
-        # ── PRIMARY: Data API (clean, only open positions) ──
+        # ── PRIMARY: Data API (clean, filters resolved markets) ──
         try:
             data_api_positions = await self._get_positions_data_api()
             if data_api_positions:
-                print(f"✅ Data API: {len(data_api_positions)} open positions")
+                print(f"✅ Data API: {len(data_api_positions)} active positions")
                 return data_api_positions
-            print(f"⚠️ Data API returned empty, falling back to trades")
+            print(f"⚠️ Data API returned empty (all resolved?), falling back to trades")
         except Exception as e:
             print(f"⚠️ Data API error, falling back to trades: {e}")
         
@@ -840,7 +840,8 @@ class PolymarketClient:
         """Fetch positions from Polymarket Data API.
         
         Uses data-api.polymarket.com/positions endpoint which returns
-        only truly open positions with current prices and market metadata.
+        positions with current prices and market metadata.
+        Filters out resolved/settled markets (price snap to 0 or 1).
         Pattern from PolyFlup (MrRakun35/Poly).
         """
         if not self._funder_address:
@@ -856,6 +857,7 @@ class PolymarketClient:
             return []
         
         positions = []
+        skipped = 0
         for item in data:
             try:
                 size = float(item.get('size', 0))
@@ -864,6 +866,36 @@ class PolymarketClient:
                 
                 avg_price = float(item.get('avgPrice', item.get('price', 0.5)))
                 cur_price = float(item.get('curPrice', item.get('currentPrice', avg_price)))
+                
+                # ── Skip resolved/settled markets ──
+                # Price snaps to 0 or 1 when market resolves
+                if cur_price <= 0.02 or cur_price >= 0.98:
+                    title = item.get('title', item.get('question', ''))[:40]
+                    print(f"   ⏭️ Skipping settled (price={cur_price:.2f}): {title}")
+                    skipped += 1
+                    continue
+                
+                # Skip if API explicitly says resolved/closed
+                if item.get('resolved') or item.get('closed'):
+                    title = item.get('title', item.get('question', ''))[:40]
+                    print(f"   ⏭️ Skipping resolved: {title}")
+                    skipped += 1
+                    continue
+                
+                # Skip if end_date has passed
+                end_date_str = item.get('endDate', item.get('end_date', ''))
+                if end_date_str:
+                    try:
+                        from datetime import timezone
+                        end_dt = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
+                        if end_dt < datetime.now(timezone.utc):
+                            title = item.get('title', item.get('question', ''))[:40]
+                            print(f"   ⏭️ Skipping ended: {title}")
+                            skipped += 1
+                            continue
+                    except Exception:
+                        pass
+                
                 pnl = (cur_price - avg_price) * size
                 pnl_pct = ((cur_price / avg_price) - 1) * 100 if avg_price > 0 else 0
                 
@@ -884,6 +916,9 @@ class PolymarketClient:
                 ))
             except Exception as e:
                 print(f"⚠️ Data API position parse error: {e}")
+        
+        if skipped:
+            print(f"   📊 Filtered out {skipped} resolved/settled positions")
         
         return positions
     

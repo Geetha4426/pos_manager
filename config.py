@@ -109,7 +109,7 @@ class Config:
     # ═══════════════════════════════════════════════════════════════════
     # MULTI-USER SESSION
     # ═══════════════════════════════════════════════════════════════════
-    SESSION_TIMEOUT = int(os.getenv('SESSION_TIMEOUT', '1800'))  # 30 min default
+    SESSION_TIMEOUT = int(os.getenv('SESSION_TIMEOUT', '0'))  # 0 = permanent (no timeout)
     
     @classmethod
     def is_paper_mode(cls) -> bool:
@@ -149,6 +149,7 @@ class Config:
         print(f"🔐 Wallet: {'✅' if cls.POLYGON_PRIVATE_KEY else '❌'}")
         print(f"💳 Funder: {'✅' if cls.FUNDER_ADDRESS else '❌'}")
         print(f"🔀 CLOB Relay: {'✅ ' + cls.CLOB_RELAY_URL if cls.CLOB_RELAY_URL else '❌ Direct (may be geo-blocked)'}")
-        print(f"👥 Multi-user: ON (session timeout: {cls.SESSION_TIMEOUT}s)")
+        timeout_label = 'permanent' if cls.SESSION_TIMEOUT == 0 else f'{cls.SESSION_TIMEOUT}s'
+        print(f"👥 Multi-user: ON (session: {timeout_label})")
         print(f"🎯 Sports: {', '.join(cls.SPORTS_PRIORITY)}")
         print("=" * 50 + "\n")

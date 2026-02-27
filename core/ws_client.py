@@ -398,17 +398,22 @@ PriceWebSocketClient = PolymarketWebSocket
 
 
 async def start_price_monitor(bot=None):
-    """Start the WebSocket price feed with optional Telegram alerts."""
+    """Start the WebSocket price feed with optional Telegram alerts and auto-execution."""
     client = get_ws_client()
     
     if bot:
+        # Track recently executed alerts to avoid duplicates
+        _executed_alerts = set()
+        
         async def check_alerts(snap: PriceSnapshot):
             try:
-                from core.alerts import get_alert_manager
+                from core.alerts import get_alert_manager, AlertType
                 manager = get_alert_manager()
                 alerts = await manager.get_alerts(active_only=True)
                 for alert in alerts:
                     if alert.token_id != snap.token_id:
+                        continue
+                    if alert.id in _executed_alerts:
                         continue
                     triggered = False
                     if alert.side == 'above' and snap.price >= alert.trigger_price:
@@ -417,19 +422,88 @@ async def start_price_monitor(bot=None):
                         triggered = True
                     if triggered:
                         await manager.mark_triggered(alert.id)
-                        try:
-                            chat_id = Config.TELEGRAM_CHAT_ID
-                            if chat_id:
-                                emoji = "🔔" if alert.side == 'above' else "🔻"
-                                text = (
-                                    f"{emoji} <b>Alert Triggered!</b>\n\n"
-                                    f"📋 {alert.market_question}\n"
-                                    f"📍 Price: {snap.price*100:.0f}¢\n"
-                                    f"🎯 Target: {alert.trigger_price*100:.0f}¢ ({alert.side})"
-                                )
-                                await bot.send_message(chat_id=chat_id, text=text, parse_mode='HTML')
-                        except Exception:
-                            pass
+                        _executed_alerts.add(alert.id)
+                        
+                        chat_id = alert.user_id or Config.TELEGRAM_CHAT_ID
+                        
+                        # Auto-execute sell for stop-loss and take-profit
+                        if alert.auto_trade and alert.alert_type in (AlertType.STOP_LOSS, AlertType.TAKE_PROFIT):
+                            try:
+                                from core.polymarket_client import get_user_client as get_pm_user_client
+                                
+                                user_id = int(alert.user_id)
+                                user_client = get_pm_user_client(user_id)
+                                
+                                if user_client:
+                                    # Execute instant sell 100%
+                                    result = await user_client.instant_sell(alert.token_id, percent=100)
+                                    
+                                    type_label = "🛑 Stop Loss" if alert.alert_type == AlertType.STOP_LOSS else "🎯 Take Profit"
+                                    
+                                    if result.success:
+                                        proceeds = result.filled_size * result.avg_price if result.avg_price > 0 else 0
+                                        text = (
+                                            f"{type_label} <b>EXECUTED!</b>\n\n"
+                                            f"📋 {alert.market_question[:50]}\n"
+                                            f"📍 Trigger: {alert.trigger_price*100:.0f}¢\n"
+                                            f"📦 Sold: {result.filled_size:.1f} shares\n"
+                                            f"💵 Price: {result.avg_price*100:.1f}¢\n"
+                                            f"💰 Proceeds: ${proceeds:.2f}\n"
+                                        )
+                                        if result.order_id:
+                                            text += f"🆔 <code>{result.order_id[:16]}...</code>"
+                                        print(f"⚡ Auto-sell executed for alert {alert.id}: {result.filled_size} shares")
+                                    else:
+                                        text = (
+                                            f"{type_label} <b>TRIGGERED but SELL FAILED</b>\n\n"
+                                            f"📋 {alert.market_question[:50]}\n"
+                                            f"📍 Trigger: {alert.trigger_price*100:.0f}¢\n"
+                                            f"❌ Error: {result.error}\n\n"
+                                            f"<i>Use /positions to sell manually.</i>"
+                                        )
+                                        print(f"❌ Auto-sell failed for alert {alert.id}: {result.error}")
+                                    
+                                    if chat_id:
+                                        await bot.send_message(chat_id=chat_id, text=text, parse_mode='HTML')
+                                else:
+                                    # Session not active — notify but can't execute
+                                    type_label = "🛑 Stop Loss" if alert.alert_type == AlertType.STOP_LOSS else "🎯 Take Profit"
+                                    if chat_id:
+                                        await bot.send_message(
+                                            chat_id=chat_id,
+                                            text=(
+                                                f"{type_label} <b>TRIGGERED — ⚠️ NO SESSION</b>\n\n"
+                                                f"📋 {alert.market_question[:50]}\n"
+                                                f"📍 Price: {snap.price*100:.0f}¢ hit {alert.trigger_price*100:.0f}¢\n\n"
+                                                f"⚠️ Could not auto-sell: wallet not unlocked.\n"
+                                                f"Use /unlock then /positions to sell manually."
+                                            ),
+                                            parse_mode='HTML'
+                                        )
+                            except Exception as e:
+                                print(f"❌ Auto-sell exception for alert {alert.id}: {e}")
+                                if chat_id:
+                                    try:
+                                        await bot.send_message(
+                                            chat_id=chat_id,
+                                            text=f"⚠️ Alert triggered but auto-sell error: {e}",
+                                        )
+                                    except Exception:
+                                        pass
+                        else:
+                            # Regular price alert — just notify
+                            try:
+                                if chat_id:
+                                    emoji = "🔔" if alert.side == 'above' else "🔻"
+                                    text = (
+                                        f"{emoji} <b>Alert Triggered!</b>\n\n"
+                                        f"📋 {alert.market_question}\n"
+                                        f"📍 Price: {snap.price*100:.0f}¢\n"
+                                        f"🎯 Target: {alert.trigger_price*100:.0f}¢ ({alert.side})"
+                                    )
+                                    await bot.send_message(chat_id=chat_id, text=text, parse_mode='HTML')
+                            except Exception:
+                                pass
             except Exception:
                 pass
         

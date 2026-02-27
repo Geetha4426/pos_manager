@@ -34,19 +34,17 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     mode_text = "📝 Paper" if Config.is_paper_mode() else "💱 Live"
     
-    text = f"""
-💰 <b>Wallet Overview</b>
-
-💵 <b>USDC Balance:</b> ${balance:.2f}
-📊 <b>Position Value:</b> ${position_value:.2f}
-━━━━━━━━━━━━━━━━━━━
-📈 <b>Total Value:</b> ${total_value:.2f}
-
-{pnl_emoji} <b>Unrealized P&L:</b> ${total_pnl:+.2f} ({pnl_percent:+.1f}%)
-📊 <b>Active Positions:</b> {len(positions)}
-
-<b>Mode:</b> {mode_text}
-"""
+    text = (
+        f"💰 <b>Wallet</b>  |  {mode_text}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💵 USDC        ${balance:.2f}\n"
+        f"📊 Positions   ${position_value:.2f}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📈 Total       ${total_value:.2f}\n\n"
+        f"{pnl_emoji} P&L  ${total_pnl:+.2f} ({pnl_percent:+.1f}%)\n"
+        f"📊 {len(positions)} active positions\n"
+        f"━━━━━━━━━━━━━━━━━━━━━"
+    )
     
     if update.callback_query:
         await update.callback_query.edit_message_text(

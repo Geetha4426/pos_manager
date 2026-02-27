@@ -13,7 +13,8 @@ Security:
 - Password messages are IMMEDIATELY deleted
 - Keys encrypted with AES-256-GCM (PBKDF2 key derivation)
 - Decrypted key lives in memory only during active session
-- Sessions auto-expire after 30 min of inactivity
+- Sessions are permanent by default (no timeout)
+- All users must /connect via Telegram (no env var keys)
 """
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -56,10 +57,11 @@ async def connect_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🔄 Re-connect (overwrite)", callback_data="auth_reconnect")],
         ])
         await update.message.reply_text(
-            "🔗 <b>Wallet Already Connected</b>\n\n"
-            "You already have a wallet linked.\n"
-            "Use /unlock to start a trading session,\n"
-            "or tap Re-connect to overwrite with a new key.",
+            "🔗 <b>Wallet Already Connected</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "You already have a wallet linked.\n\n"
+            "• /unlock to start trading\n"
+            "• Re-connect to overwrite with a new key",
             parse_mode='HTML',
             reply_markup=keyboard
         )
@@ -87,14 +89,14 @@ async def reconnect_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def _ask_for_key(update: Update):
     """Prompt user to send private key."""
     text = (
-        "🔐 <b>Connect Wallet</b>\n\n"
+        "🔐 <b>Connect Wallet</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n\n"
         "Send your <b>Polygon private key</b> now.\n\n"
         "🛡️ <b>Security:</b>\n"
-        "• Your message will be <b>instantly deleted</b>\n"
-        "• Key is encrypted with your password (AES-256-GCM)\n"
-        "• Password is NEVER stored\n"
-        "• Encrypted blob is useless without your password\n\n"
-        "<i>Format: 0x... (64 hex characters)</i>\n\n"
+        "• Message <b>instantly deleted</b>\n"
+        "• Encrypted with AES-256-GCM\n"
+        "• Password NEVER stored\n\n"
+        "<i>Format: 0x... (64 hex characters)</i>\n"
         "Send /cancel to abort."
     )
     if update.message:
@@ -127,11 +129,12 @@ async def receive_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['_temp_key'] = key
     
     await update.effective_chat.send_message(
-        "✅ Key received and <b>deleted from chat</b>.\n\n"
-        "Now set an <b>encryption password</b>.\n"
-        "This password encrypts your key — you'll need it to unlock.\n\n"
-        "⚠️ <b>If you forget this password, your key cannot be recovered.</b>\n\n"
-        "<i>Minimum 6 characters. This message will also be deleted.</i>\n\n"
+        "✅ Key received and <b>deleted</b>.\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "Set an <b>encryption password</b>.\n"
+        "You'll need it to unlock your wallet.\n\n"
+        "⚠️ <b>Forget password = key unrecoverable</b>\n\n"
+        "<i>Min 6 characters · message auto-deleted</i>\n"
         "Send /cancel to abort.",
         parse_mode='HTML'
     )
@@ -157,10 +160,11 @@ async def receive_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['_temp_password'] = password
 
     await update.effective_chat.send_message(
-        "🏦 <b>Funder Address</b> (optional)\n\n"
-        "If you use a Polymarket proxy wallet (Magic/email login),\n"
-        "send the <b>funder (proxy) address</b> now.\n\n"
-        "If you use a direct EOA wallet, send /skip.\n\n"
+        "🏦 <b>Funder Address</b> (optional)\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "If you use a <b>Polymarket proxy wallet</b>\n"
+        "(Magic/email login), send the <b>proxy address</b>.\n\n"
+        "Direct EOA wallet \u2192 send /skip\n\n"
         "<i>Format: 0x... (Polygon address)</i>",
         parse_mode='HTML'
     )
@@ -212,14 +216,16 @@ async def receive_funder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     password = None
 
     if success:
-        sig_label = "EOA (direct wallet)" if sig_type == 0 else "GnosisSafe (proxy wallet)"
+        sig_label = "EOA (direct)" if sig_type == 0 else "GnosisSafe (proxy)"
         await update.message.reply_text(
-            f"✅ <b>Wallet Connected!</b>\n\n"
-            f"🔐 Key encrypted with AES-256-GCM\n"
-            f"🏦 Funder: {funder[:8]}...{funder[-4:] if funder else 'default (EOA)'}\n"
-            f"📝 Signature type: {sig_type} ({sig_label})\n\n"
-            f"Use /unlock to start trading.\n"
-            f"Use /disconnect to remove your wallet.",
+            f"✅ <b>Wallet Connected</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🔐 Encrypted (AES-256-GCM)\n"
+            f"🏦 {funder[:8]}...{funder[-4:] if funder else 'default (EOA)'}\n"
+            f"📝 {sig_label}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"• /unlock to start trading\n"
+            f"• /disconnect to remove wallet",
             parse_mode='HTML'
         )
     else:
@@ -256,17 +262,19 @@ async def unlock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session = um.get_session(user_id)
         addr = session.funder_address if session else '?'
         await update.message.reply_text(
-            f"🔓 <b>Already Unlocked</b>\n\n"
-            f"Wallet: <code>{addr[:8]}...{addr[-4:]}</code>\n"
+            f"🔓 <b>Already Unlocked</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🏦 <code>{addr[:8]}...{addr[-4:]}</code>\n\n"
             f"Use /lock to end session.",
             parse_mode='HTML'
         )
         return ConversationHandler.END
 
     await update.message.reply_text(
-        "🔑 <b>Unlock Wallet</b>\n\n"
+        "🔑 <b>Unlock Wallet</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n\n"
         "Send your <b>encryption password</b>.\n"
-        "<i>(The message will be deleted immediately)</i>\n\n"
+        "<i>Message auto-deleted</i>\n\n"
         "Send /cancel to abort.",
         parse_mode='HTML'
     )
@@ -286,9 +294,10 @@ async def unlock_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     
     await query.edit_message_text(
-        "🔑 <b>Unlock Wallet</b>\n\n"
+        "🔑 <b>Unlock Wallet</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n\n"
         "Send your <b>encryption password</b>.\n"
-        "<i>(The message will be deleted immediately)</i>\n\n"
+        "<i>Message auto-deleted</i>\n\n"
         "Send /cancel to abort.",
         parse_mode='HTML'
     )
@@ -310,10 +319,11 @@ async def receive_unlock_password(update: Update, context: ContextTypes.DEFAULT_
 
     if success:
         await update.effective_chat.send_message(
-            f"🔓 <b>Wallet Unlocked!</b>\n\n"
+            f"🔓 <b>Wallet Unlocked</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"{message}\n\n"
-            f"⏱️ Session expires after 30 min of inactivity.\n"
-            f"Use /lock to end session manually.\n\n"
+            f"✅ Session is permanent (no timeout)\n"
+            f"🔒 /lock to end session manually\n\n"
             f"Ready to trade! Try /positions or /buy",
             parse_mode='HTML'
         )
@@ -343,10 +353,11 @@ async def lock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if um.lock_session(user_id):
         await update.message.reply_text(
-            "🔒 <b>Session Locked</b>\n\n"
-            "Your ClobClient has been destroyed.\n"
-            "Decrypted key cleared from memory.\n\n"
-            "Use /unlock to start a new session.",
+            "🔒 <b>Session Locked</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "ClobClient destroyed\n"
+            "Decrypted key cleared from memory\n\n"
+            "/unlock to start a new session",
             parse_mode='HTML'
         )
     else:
@@ -369,9 +380,11 @@ async def disconnect_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return ConversationHandler.END
 
     await update.message.reply_text(
-        "⚠️ <b>Disconnect Wallet</b>\n\n"
-        "This will <b>permanently delete</b> your encrypted key from the bot.\n\n"
-        "Type <b>CONFIRM</b> to proceed, or /cancel to abort.",
+        "⚠️ <b>Disconnect Wallet</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "This will <b>permanently delete</b> your\n"
+        "encrypted key from the bot.\n\n"
+        "Type <b>CONFIRM</b> to proceed, or /cancel",
         parse_mode='HTML'
     )
     return WAITING_DISCONNECT_CONFIRM
@@ -393,10 +406,11 @@ async def receive_disconnect_confirm(update: Update, context: ContextTypes.DEFAU
     success = await um.delete_user(user_id)
     if success:
         await update.message.reply_text(
-            "✅ <b>Wallet Disconnected</b>\n\n"
-            "Your encrypted key has been deleted.\n"
-            "Session destroyed.\n\n"
-            "Use /connect to link a new wallet.",
+            "✅ <b>Wallet Disconnected</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Encrypted key deleted\n"
+            "Session destroyed\n\n"
+            "/connect to link a new wallet",
             parse_mode='HTML'
         )
     else:
@@ -425,9 +439,10 @@ async def mystatus_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not registered:
         text = (
-            "📋 <b>Your Status</b>\n\n"
-            "🔗 Wallet: Not connected\n\n"
-            "Use /connect to link your wallet."
+            "� <b>Account Status</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "🔴 Wallet: Not connected\n\n"
+            "/connect to link your wallet"
         )
     elif session:
         import time
@@ -436,25 +451,26 @@ async def mystatus_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         idle = int(time.time() - session.last_activity)
         addr = session.funder_address
         text = (
-            f"📋 <b>Your Status</b>\n\n"
-            f"🔓 <b>Session: ACTIVE</b>\n"
-            f"🏦 Wallet: <code>{addr[:8]}...{addr[-4:]}</code>\n"
-            f"⏱️ Active for: {mins} min\n"
-            f"💤 Idle: {idle}s\n"
-            f"👤 Name: {session.display_name}\n\n"
-            f"Use /lock to end session."
+            f"👤 <b>Account Status</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🟢 <b>Session: ACTIVE</b>\n"
+            f"🏦 <code>{addr[:8]}...{addr[-4:]}</code>\n\n"
+            f"⏱️ Active: {mins}m  |  💤 Idle: {idle}s\n"
+            f"👤 {session.display_name}\n\n"
+            f"/lock to end session"
         )
     else:
         text = (
-            "📋 <b>Your Status</b>\n\n"
+            "👤 <b>Account Status</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n\n"
             "🔒 <b>Session: LOCKED</b>\n"
             "🔗 Wallet: Connected (encrypted)\n\n"
-            "Use /unlock to start trading."
+            "/unlock to start trading"
         )
 
     total_users = await um.get_user_count()
     active = um.get_active_session_count()
-    text += f"\n\n📊 Bot: {total_users} users, {active} active"
+    text += f"\n\n━━━━━━━━━━━━━━━━━━━━━\n📊 {total_users} users · {active} active"
 
     await update.message.reply_text(text, parse_mode='HTML')
 
