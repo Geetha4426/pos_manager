@@ -347,6 +347,7 @@ async def instant_sell_callback(update: Update, context: ContextTypes.DEFAULT_TY
         
         # Fallback when API doesn't return fill details
         sell_shares = pos.size * (percent / 100)
+        is_gtc_pending = result.filled_size == 0 and result.avg_price > 0
         filled = result.filled_size if result.filled_size > 0 else sell_shares
         price = result.avg_price if result.avg_price > 0 else pos.current_price
         proceeds = filled * price
@@ -366,21 +367,36 @@ async def instant_sell_callback(update: Update, context: ContextTypes.DEFAULT_TY
         
         pnl_emoji = "🟢" if pnl >= 0 else "🔴"
         
-        text = (
-            f"✅ <b>Sold Successfully</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📋 {pos.market_question[:50]}\n\n"
-            f"📦 Sold     {filled:.2f} shares\n"
-            f"💵 Price    {price*100:.1f}¢\n"
-            f"💰 Proceeds ${proceeds:.2f}\n"
-        )
-        if fee_usd > 0:
-            text += f"💸 Fee      ~${fee_usd:.2f}\n"
-            text += f"💵 Net      ~${net_proceeds:.2f}\n"
-        text += f"{pnl_emoji} P&L      ${pnl:+.2f}\n"
-        if result.order_id:
-            text += f"━━━━━━━━━━━━━━━━━━━━━\n🆔 <code>{result.order_id[:16]}...</code>\n"
-        text += f"\n<i>{'📝 Paper' if Config.is_paper_mode() else '💱 Live'}</i>"
+        if is_gtc_pending:
+            # GTC order placed but not filled yet
+            text = (
+                f"📋 <b>Sell Order Placed (GTC)</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📋 {pos.market_question[:50]}\n\n"
+                f"📦 Selling  {sell_shares:.2f} shares\n"
+                f"💵 Price    {price*100:.1f}¢\n"
+                f"⏳ Status   Pending fill\n"
+            )
+            if result.order_id:
+                text += f"━━━━━━━━━━━━━━━━━━━━━\n🆔 <code>{result.order_id[:16]}...</code>\n"
+            text += f"\n<i>GTC order on book — check /orders</i>"
+        else:
+            # FAK/FOK filled instantly
+            text = (
+                f"✅ <b>Sold Successfully</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📋 {pos.market_question[:50]}\n\n"
+                f"📦 Sold     {filled:.2f} shares\n"
+                f"💵 Price    {price*100:.1f}¢\n"
+                f"💰 Proceeds ${proceeds:.2f}\n"
+            )
+            if fee_usd > 0:
+                text += f"💸 Fee      ~${fee_usd:.2f}\n"
+                text += f"💵 Net      ~${net_proceeds:.2f}\n"
+            text += f"{pnl_emoji} P&L      ${pnl:+.2f}\n"
+            if result.order_id:
+                text += f"━━━━━━━━━━━━━━━━━━━━━\n🆔 <code>{result.order_id[:16]}...</code>\n"
+            text += f"\n<i>{'📝 Paper' if Config.is_paper_mode() else '💱 Live'}</i>"
     else:
         text = (
             f"❌ <b>Sell Failed</b>\n"
@@ -406,6 +422,9 @@ async def instant_sell_callback(update: Update, context: ContextTypes.DEFAULT_TY
         ])
     
     await query.edit_message_text(text, parse_mode='HTML', reply_markup=keyboard)
+    
+    # Clear double-sell protection
+    context.user_data.pop(selling_key, None)
 
 
 async def sell_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -549,10 +568,11 @@ async def confirm_sell_callback(update: Update, context: ContextTypes.DEFAULT_TY
         if fee_usd > 0:
             text += f"💸 Fee      ~${fee_usd:.2f}\n"
             text += f"💵 Net      ~${net_proceeds:.2f}\n"
+        order_tag = f"🆔 <code>{result.order_id[:16]}...</code>\n" if result.order_id else ""
         text += (
             f"{pnl_emoji} P&L      ${pnl:+.2f}\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🆔 <code>{result.order_id[:16]}...</code>\n"
+            f"{order_tag}"
             f"<i>{'📝 Paper trade' if Config.is_paper_mode() else '💱 Live trade'}</i>"
         )
     else:
@@ -828,6 +848,18 @@ async def sl_set_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     stop_price = price_cents / 100.0
+    
+    # Validate: SL must be below current price
+    if stop_price >= pos.current_price:
+        await query.edit_message_text(
+            f"\u26a0\ufe0f <b>Invalid Stop Loss</b>\n\n"
+            f"Stop loss ({price_cents}\u00a2) must be <b>below</b> current price ({pos.current_price*100:.0f}\u00a2).\n\n"
+            f"<i>Try a lower price.</i>",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("\ud83d\udcca Positions", callback_data="positions")]])
+        )
+        return
+    
     user_id = str(update.effective_user.id)
     
     manager = get_alert_manager()
@@ -876,6 +908,18 @@ async def tp_set_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     target_price = price_cents / 100.0
+    
+    # Validate: TP must be above current price
+    if target_price <= pos.current_price:
+        await query.edit_message_text(
+            f"\u26a0\ufe0f <b>Invalid Take Profit</b>\n\n"
+            f"Take profit ({price_cents}\u00a2) must be <b>above</b> current price ({pos.current_price*100:.0f}\u00a2).\n\n"
+            f"<i>Try a higher price.</i>",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("\ud83d\udcca Positions", callback_data="positions")]])
+        )
+        return
+    
     user_id = str(update.effective_user.id)
     
     manager = get_alert_manager()
@@ -917,6 +961,14 @@ async def stop_loss_price_input(update: Update, context: ContextTypes.DEFAULT_TY
             return ConversationHandler.END
         
         stop_price = price_cents / 100.0
+        
+        # Validate: SL must be below current price
+        if stop_price >= pos.current_price:
+            await update.message.reply_text(
+                f"\u26a0\ufe0f Stop loss ({price_cents}\u00a2) must be below current price ({pos.current_price*100:.0f}\u00a2). Try lower."
+            )
+            return STOP_LOSS_PRICE
+        
         user_id = str(update.effective_user.id)
         pos_index = context.user_data.get('sl_tp_index', 0)
         
@@ -963,6 +1015,14 @@ async def take_profit_price_input(update: Update, context: ContextTypes.DEFAULT_
             return ConversationHandler.END
         
         target_price = price_cents / 100.0
+        
+        # Validate: TP must be above current price
+        if target_price <= pos.current_price:
+            await update.message.reply_text(
+                f"\u26a0\ufe0f Take profit ({price_cents}\u00a2) must be above current price ({pos.current_price*100:.0f}\u00a2). Try higher."
+            )
+            return TAKE_PROFIT_PRICE
+        
         user_id = str(update.effective_user.id)
         pos_index = context.user_data.get('sl_tp_index', 0)
         

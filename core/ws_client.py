@@ -268,9 +268,13 @@ class PolymarketWebSocket:
                     best_bid = 0.0
                     best_ask = 0.0
                     if bids:
-                        best_bid = max(float(b.get('price', b.get('p', 0))) for b in bids)
+                        bid_prices = [float(b.get('price', b.get('p', 0))) for b in bids]
+                        bid_prices = [p for p in bid_prices if 0 < p <= 1.0]
+                        best_bid = max(bid_prices) if bid_prices else 0.0
                     if asks:
-                        best_ask = min(float(a.get('price', a.get('p', 1.0))) for a in asks)
+                        ask_prices = [float(a.get('price', a.get('p', 0))) for a in asks]
+                        ask_prices = [p for p in ask_prices if 0 < p <= 1.0]
+                        best_ask = min(ask_prices) if ask_prices else 0.0
                     if best_bid > 0 or best_ask > 0:
                         price = (best_bid + best_ask) / 2 if best_bid > 0 and best_ask > 0 else (best_ask or best_bid)
                         await self._apply_price(asset_id, price, best_bid, best_ask)
@@ -325,6 +329,9 @@ class PolymarketWebSocket:
     async def _apply_price(self, token_id: str, price: float,
                            best_bid: float = 0, best_ask: float = 0):
         """Store price update and trigger all callbacks."""
+        # Sanity: Polymarket prices are always 0-1 decimal
+        if price <= 0 or price > 1.0:
+            return
         if best_ask <= 0:
             best_ask = price
         if best_bid <= 0:
@@ -407,6 +414,9 @@ async def start_price_monitor(bot=None):
         
         async def check_alerts(snap: PriceSnapshot):
             try:
+                # Skip invalid prices — prevents false SL/TP triggers from WS glitches
+                if snap.price < 0.01 or snap.price > 0.99:
+                    return
                 from core.alerts import get_alert_manager, AlertType
                 manager = get_alert_manager()
                 alerts = await manager.get_alerts(active_only=True)

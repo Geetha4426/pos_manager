@@ -652,9 +652,10 @@ async def execute_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         if fee_usd > 0:
             text += f"💸 Fee      ~${fee_usd:.2f}\n"
             text += f"💰 Total    ~${cost + fee_usd:.2f}\n"
+        order_tag = f"🆔 <code>{result.order_id[:16]}...</code>\n" if result.order_id else ""
         text += (
             f"━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🆔 <code>{result.order_id[:16]}...</code>\n"
+            f"{order_tag}"
             f"<i>{'📝 Paper trade' if Config.is_paper_mode() else '💱 Live trade'}</i>\n\n"
             f"/positions → view live P&L"
         )
@@ -704,10 +705,24 @@ async def execute_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 f"Please try again."
             )
     
-    await query.edit_message_text(text, parse_mode='HTML')
-
-
-# Legacy market_callback for non-event markets (search results)
+    # After buy: show action buttons
+    if result.success:
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📊 Positions", callback_data="positions"),
+                InlineKeyboardButton("🛒 Buy More", callback_data="buy"),
+            ],
+            [InlineKeyboardButton("🏠 Menu", callback_data="menu")]
+        ])
+    else:
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔄 Try Again", callback_data="buy"),
+                InlineKeyboardButton("🏠 Menu", callback_data="menu"),
+            ]
+        ])
+    
+    await query.edit_message_text(text, parse_mode='HTML', reply_markup=keyboard)
 async def market_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle market selection from search results."""
     query = update.callback_query

@@ -25,9 +25,16 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     balance = await client.get_balance()
     positions = await client.get_positions()
     
-    position_value = sum(p.value for p in positions)
+    # Filter out settled/resolved positions (same logic as /positions)
+    active_positions = [
+        p for p in positions
+        if not (p.current_price <= 0.02 or p.current_price >= 0.98
+                or p.pnl_percent <= -95 or p.pnl_percent >= 95)
+    ]
+    
+    position_value = sum(p.value for p in active_positions)
     total_value = balance + position_value
-    total_pnl = sum(p.pnl for p in positions)
+    total_pnl = sum(p.pnl for p in active_positions)
     
     pnl_emoji = "🟢" if total_pnl >= 0 else "🔴"
     pnl_percent = (total_pnl / (total_value - total_pnl) * 100) if (total_value - total_pnl) > 0 else 0
@@ -42,7 +49,7 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"📈 Total       ${total_value:.2f}\n\n"
         f"{pnl_emoji} P&L  ${total_pnl:+.2f} ({pnl_percent:+.1f}%)\n"
-        f"📊 {len(positions)} active positions\n"
+        f"📊 {len(active_positions)} active positions\n"
         f"━━━━━━━━━━━━━━━━━━━━━"
     )
     

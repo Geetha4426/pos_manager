@@ -104,12 +104,26 @@ async def start_command(update: Update, context):
     
     mode = "PAPER 📝" if Config.is_paper_mode() else "LIVE 🔴"
     
+    # Quick position summary from cache (zero latency — no API call)
+    pos_badge = ""
+    try:
+        from core.position_manager import get_position_manager
+        pm = get_position_manager()
+        live_positions = pm.get_all_positions()
+        if live_positions:
+            total_val = sum(p.value for p in live_positions.values())
+            total_pnl = sum(p.pnl for p in live_positions.values())
+            pnl_e = "🟢" if total_pnl >= 0 else "🔴"
+            pos_badge = f"\n📊 {len(live_positions)} positions · ${total_val:.2f} · {pnl_e} ${total_pnl:+.2f}"
+    except Exception:
+        pass
+    
     text = (
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"⚡ <b>POLYMARKET SNIPER</b> ⚡\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"👤 {user.first_name} │ {mode}\n"
-        f"👛 {wallet_status}{wallet_addr}\n\n"
+        f"👛 {wallet_status}{wallet_addr}{pos_badge}\n\n"
         f"━━━ <b>Quick Actions</b> ━━━━━━━━━━━━\n\n"
         f"🛒 <b>/buy</b> — Open new position\n"
         f"📊 <b>/positions</b> — Manage & sell\n"

@@ -52,11 +52,11 @@ def positions_keyboard(positions: List[Any]) -> InlineKeyboardMarkup:
         ])
     
     buttons.append([
-        InlineKeyboardButton("� Stop Loss", callback_data="sl_pick"),
+        InlineKeyboardButton("📉 Stop Loss", callback_data="sl_pick"),
         InlineKeyboardButton("📈 Take Profit", callback_data="tp_pick"),
     ])
     buttons.append([
-        InlineKeyboardButton("�🔄 Refresh", callback_data="refresh_positions"),
+        InlineKeyboardButton("🔄 Refresh", callback_data="refresh_positions"),
         InlineKeyboardButton("🏠 Menu", callback_data="menu")
     ])
     return InlineKeyboardMarkup(buttons)
