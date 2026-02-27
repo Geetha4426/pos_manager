@@ -1983,33 +1983,38 @@ class PolymarketClient:
                 
                 if resp.status_code == 200:
                     data = resp.json()
-                    markets = self._parse_markets([data])
+                    markets = self._parse_markets([data], filter_tradable=False)
                     return markets[0] if markets else None
         except Exception as e:
             print(f"⚠️ Market details error: {e}")
         
         return None
     
-    def _parse_markets(self, data: List[Dict]) -> List[Market]:
+    def _parse_markets(self, data: List[Dict], filter_tradable: bool = True) -> List[Market]:
         """Parse markets from API response.
         
         Enhanced: uses outcomePrices field when token prices are stale (0.5),
         filters non-tradable markets, handles non-Yes/No outcomes (team names),
         and uses clobTokenIds as fallback for token IDs.
+        
+        Args:
+            filter_tradable: If True, skip closed/archived/non-accepting markets.
+                            Set False for detail views (favorites, info).
         """
         markets = []
         
         for item in data:
             try:
                 # Skip non-tradable markets (from Polymarket/agents gamma.py pattern)
-                if item.get('closed', False) or item.get('archived', False):
-                    continue
-                enable_ob = item.get('enableOrderBook', True)
-                if isinstance(enable_ob, bool) and not enable_ob:
-                    continue
-                accepting = item.get('accepting_orders', item.get('acceptingOrders', True))
-                if isinstance(accepting, bool) and not accepting:
-                    continue
+                if filter_tradable:
+                    if item.get('closed', False) or item.get('archived', False):
+                        continue
+                    enable_ob = item.get('enableOrderBook', True)
+                    if isinstance(enable_ob, bool) and not enable_ob:
+                        continue
+                    accepting = item.get('accepting_orders', item.get('acceptingOrders', True))
+                    if isinstance(accepting, bool) and not accepting:
+                        continue
                 
                 tokens = item.get('tokens', [])
                 question = item.get('question', 'Unknown')
