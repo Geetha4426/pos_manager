@@ -156,8 +156,10 @@ class PositionManager:
             client = get_polymarket_client()
             positions = await client.get_positions()
             
+            # Replace entire cache — removes closed/settled positions
+            new_positions = {}
             for pos in positions:
-                self._positions[pos.token_id] = LivePosition(
+                new_positions[pos.token_id] = LivePosition(
                     token_id=pos.token_id,
                     condition_id=pos.condition_id,
                     question=pos.market_question,
@@ -168,6 +170,7 @@ class PositionManager:
                     best_bid=pos.current_price,
                     last_update=time.time(),
                 )
+            self._positions = new_positions
             
             print(f"📦 Loaded {len(self._positions)} positions for tracking")
         except Exception as e:

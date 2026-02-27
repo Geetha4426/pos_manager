@@ -132,7 +132,7 @@ class FavoritesDB:
                     (user_id, market_id)
                 ) as cursor:
                     return await cursor.fetchone() is not None
-        except:
+        except Exception:
             return False
 
 

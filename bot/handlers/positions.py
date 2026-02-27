@@ -280,6 +280,24 @@ async def position_detail_callback(update: Update, context: ContextTypes.DEFAULT
     if fee_pct > 0:
         text += f"{net_pnl_color} Net P&L   ${net_pnl:+.2f}\n"
     
+    # Show active SL/TP alerts for this position
+    try:
+        from core.alerts import get_alert_manager as _get_am, AlertType as _AT
+        _am = _get_am()
+        _user_alerts = await _am.get_alerts(user_id=str(update.effective_user.id), active_only=True)
+        _pos_alerts = [a for a in _user_alerts if a.token_id == pos.token_id]
+        if _pos_alerts:
+            text += "━━━━━━━━━━━━━━━━━━━━━\n"
+            for _a in _pos_alerts:
+                if _a.alert_type == _AT.STOP_LOSS:
+                    text += f"🛑 SL: {_a.trigger_price*100:.0f}¢\n"
+                elif _a.alert_type == _AT.TAKE_PROFIT:
+                    text += f"🎯 TP: {_a.trigger_price*100:.0f}¢\n"
+                else:
+                    text += f"🔔 Alert: {_a.trigger_price*100:.0f}¢ ({_a.side})\n"
+    except Exception:
+        pass
+    
     text += (
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"🆔 <code>{pos.token_id}</code>\n"
@@ -312,6 +330,13 @@ async def instant_sell_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.answer("⚠️ Position not found")
         await query.edit_message_text("⚠️ Position not found. Use /positions to refresh.")
         return
+    
+    # Double-sell protection
+    selling_key = f"selling_{pos.token_id}"
+    if context.user_data.get(selling_key):
+        await query.answer("⏳ Sell already in progress", show_alert=True)
+        return
+    context.user_data[selling_key] = True
     
     await query.answer("⚡ Selling NOW...")
     
@@ -421,7 +446,10 @@ async def instant_sell_callback(update: Update, context: ContextTypes.DEFAULT_TY
             [InlineKeyboardButton("📊 Back to Positions", callback_data="refresh_positions")]
         ])
     
-    await query.edit_message_text(text, parse_mode='HTML', reply_markup=keyboard)
+    try:
+        await query.edit_message_text(text, parse_mode='HTML', reply_markup=keyboard)
+    except Exception:
+        pass
     
     # Clear double-sell protection
     context.user_data.pop(selling_key, None)
@@ -870,6 +898,14 @@ async def sl_set_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         stop_price=stop_price
     )
     
+    # Ensure token is subscribed to WS for price monitoring
+    try:
+        from core.ws_client import get_ws_client
+        ws = get_ws_client()
+        await ws.subscribe(pos.token_id)
+    except Exception:
+        pass
+    
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 Back to Position", callback_data=f"pos_{pos_index}")],
         [InlineKeyboardButton("🔔 View All Alerts", callback_data="alerts")]
@@ -885,6 +921,8 @@ async def sl_set_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='HTML',
         reply_markup=keyboard
     )
+    
+    return ConversationHandler.END
 
 
 async def tp_set_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -930,6 +968,14 @@ async def tp_set_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_price=target_price
     )
     
+    # Ensure token is subscribed to WS for price monitoring
+    try:
+        from core.ws_client import get_ws_client
+        ws = get_ws_client()
+        await ws.subscribe(pos.token_id)
+    except Exception:
+        pass
+    
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 Back to Position", callback_data=f"pos_{pos_index}")],
         [InlineKeyboardButton("🔔 View All Alerts", callback_data="alerts")]
@@ -945,6 +991,8 @@ async def tp_set_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='HTML',
         reply_markup=keyboard
     )
+    
+    return ConversationHandler.END
 
 
 async def stop_loss_price_input(update: Update, context: ContextTypes.DEFAULT_TYPE):

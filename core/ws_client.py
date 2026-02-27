@@ -411,16 +411,27 @@ async def start_price_monitor(bot=None):
     if bot:
         # Track recently executed alerts to avoid duplicates
         _executed_alerts = set()
+        # Cache alerts to avoid SQLite query on every WS tick
+        _cached_alerts = []
+        _alert_cache_time = 0
+        _ALERT_CACHE_TTL = 5  # seconds
         
         async def check_alerts(snap: PriceSnapshot):
+            nonlocal _cached_alerts, _alert_cache_time
             try:
-                # Skip invalid prices — prevents false SL/TP triggers from WS glitches
+                # Skip invalid prices \u2014 prevents false SL/TP triggers from WS glitches
                 if snap.price < 0.01 or snap.price > 0.99:
                     return
                 from core.alerts import get_alert_manager, AlertType
                 manager = get_alert_manager()
-                alerts = await manager.get_alerts(active_only=True)
-                for alert in alerts:
+                
+                # Refresh cache every N seconds instead of every tick
+                now = time.time()
+                if now - _alert_cache_time > _ALERT_CACHE_TTL:
+                    _cached_alerts = await manager.get_alerts(active_only=True)
+                    _alert_cache_time = now
+                
+                for alert in _cached_alerts:
                     if alert.token_id != snap.token_id:
                         continue
                     if alert.id in _executed_alerts:

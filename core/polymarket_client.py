@@ -875,8 +875,8 @@ class PolymarketClient:
                     skipped += 1
                     continue
                 
-                # Skip if API explicitly says resolved/closed
-                if item.get('resolved') or item.get('closed'):
+                # Skip if API explicitly says resolved/closed/redeemed
+                if item.get('resolved') or item.get('closed') or item.get('redeemed'):
                     title = item.get('title', item.get('question', ''))[:40]
                     print(f"   ⏭️ Skipping resolved: {title}")
                     skipped += 1
@@ -2232,12 +2232,18 @@ class PolymarketClient:
                             break
                     
                     print(f"✅ FAK buy filled: {filled} shares @ {avg_price} (attempt {attempt+1})")
-                    return OrderResult(
-                        success=True,
-                        order_id=str(order_id),
-                        filled_size=filled if filled else 0,
-                        avg_price=avg_price if avg_price else 0
-                    )
+                    
+                    # If API says success but 0 shares filled, treat as failure
+                    if filled <= 0:
+                        print(f"⚠️ FAK success but 0 fill — treating as unfilled, trying next...")
+                        last_error = "FAK accepted but 0 shares filled"
+                    else:
+                        return OrderResult(
+                            success=True,
+                            order_id=str(order_id),
+                            filled_size=filled,
+                            avg_price=avg_price if avg_price else 0
+                        )
                 else:
                     last_error = resp.get('error', resp.get('errorMsg', 'FAK order failed')) if isinstance(resp, dict) else getattr(resp, 'error', getattr(resp, 'errorMsg', 'FAK order failed'))
                     print(f"⚠️ FAK buy attempt {attempt+1} failed: {last_error}")
@@ -2787,8 +2793,8 @@ class PolymarketClient:
                             amount=shares,
                             side=SELL
                         )
-                        signed = self.clob_client.create_market_order(order)
-                        resp = self.clob_client.post_order(signed, order_type)
+                        signed = self._clob_call(self.clob_client.create_market_order, order)
+                        resp = self._clob_call(self.clob_client.post_order, signed, order_type)
                         
                         success = resp.get('success', False) if isinstance(resp, dict) else getattr(resp, 'success', False)
                         

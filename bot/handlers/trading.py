@@ -6,7 +6,7 @@ Shows: Sport → Events (matches) → Sub-Markets (toss, top scorer, etc.) → Y
 Events sorted: 🔴 LIVE first → 🟢 Upcoming by date. Past events excluded.
 """
 
-from telegram import Update
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, ConversationHandler
 
 import sys
@@ -559,6 +559,27 @@ async def show_buy_confirmation(query, context, amount: float):
     mode_text = "📝 PAPER" if Config.is_paper_mode() else "💱 LIVE"
     event_title = event.title if event else sub.question
     
+    # Fetch USDC balance (cached, fast)
+    balance_line = ""
+    try:
+        from core.polymarket_client import get_polymarket_client
+        client = get_polymarket_client()
+        bal = await client.get_balance()
+        remaining = bal - amount
+        balance_line = f"💵 Balance   ${bal:.2f} → ${remaining:.2f}\n"
+    except Exception:
+        pass
+    
+    # Fee estimate
+    fee_line = ""
+    try:
+        from core.position_manager import calc_fee
+        fee_rate = calc_fee(price)
+        fee_usd = amount * fee_rate
+        fee_line = f"💸 Fee       ~${fee_usd:.2f} ({fee_rate*100:.2f}%)\n"
+    except Exception:
+        pass
+    
     text = (
         f"⚡ <b>Confirm Buy</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
@@ -568,6 +589,8 @@ async def show_buy_confirmation(query, context, amount: float):
         f"Price     ${price:.4f}\n"
         f"Amount    ${amount:.2f}\n"
         f"Shares    ~{est_shares:.2f}\n"
+        f"{fee_line}"
+        f"{balance_line}"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"Mode: {mode_text}\n\n"
         f"<i>🔥 Market order = instant execution</i>"
@@ -849,6 +872,27 @@ async def custom_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         event_title = event.title if event else (sub.question if sub else 'Unknown')
         sub_title = sub.group_item_title or sub.question if sub else ''
         
+        # Fetch USDC balance
+        balance_line = ""
+        try:
+            from core.polymarket_client import get_polymarket_client
+            client = get_polymarket_client()
+            bal = await client.get_balance()
+            remaining = bal - amount
+            balance_line = f"💵 Balance   ${bal:.2f} → ${remaining:.2f}\n"
+        except Exception:
+            pass
+        
+        # Fee estimate
+        fee_line = ""
+        try:
+            from core.position_manager import calc_fee
+            fee_rate = calc_fee(price)
+            fee_usd = amount * fee_rate
+            fee_line = f"💸 Fee       ~${fee_usd:.2f} ({fee_rate*100:.2f}%)\n"
+        except Exception:
+            pass
+        
         text = (
             f"⚡ <b>Confirm Buy</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n"
@@ -858,6 +902,8 @@ async def custom_amount_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"Price     ${price:.4f}\n"
             f"Amount    ${amount:.2f}\n"
             f"Shares    ~{est_shares:.2f}\n"
+            f"{fee_line}"
+            f"{balance_line}"
             f"━━━━━━━━━━━━━━━━━━━━━\n"
             f"Mode: {mode_text}"
         )

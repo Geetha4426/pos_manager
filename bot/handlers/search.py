@@ -208,13 +208,21 @@ async def info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def hot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /hot command - show trending markets."""
-    client = get_polymarket_client()
-    
-    # Get sports markets sorted by volume
-    markets = await client.get_sports_markets(limit=10)
-    
-    if not markets:
-        markets = await client.search_markets("", limit=10)
+    try:
+        client = get_polymarket_client()
+        
+        # Get sports markets sorted by volume
+        markets = await client.get_sports_markets(limit=10)
+        
+        if not markets:
+            markets = await client.search_markets("", limit=10)
+    except Exception as e:
+        text = f"\u26a0\ufe0f Could not fetch trending markets.\n\n<i>Error: {str(e)[:100]}</i>"
+        if update.callback_query:
+            await update.callback_query.edit_message_text(text, parse_mode='HTML')
+        else:
+            await update.message.reply_text(text, parse_mode='HTML')
+        return
     
     if not markets:
         await update.message.reply_text("📭 No trending markets found")

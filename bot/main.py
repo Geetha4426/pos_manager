@@ -85,6 +85,11 @@ async def start_command(update: Update, context):
     """Handle /start command - main dashboard like Trojan/BonkBot."""
     user = update.effective_user
     
+    # Auth guard: restrict to TELEGRAM_CHAT_ID if configured
+    if Config.TELEGRAM_CHAT_ID and str(user.id) != str(Config.TELEGRAM_CHAT_ID):
+        await update.message.reply_text("🚫 Unauthorized. This bot is private.")
+        return
+    
     # Check wallet status
     wallet_status = "🔴 Not Connected"
     wallet_addr = ""
@@ -111,8 +116,9 @@ async def start_command(update: Update, context):
         pm = get_position_manager()
         live_positions = pm.get_all_positions()
         if live_positions:
-            total_val = sum(p.value for p in live_positions.values())
-            total_pnl = sum(p.pnl for p in live_positions.values())
+            # get_all_positions returns a list
+            total_val = sum(getattr(p, 'value', 0) for p in live_positions)
+            total_pnl = sum(getattr(p, 'pnl', 0) for p in live_positions)
             pnl_e = "🟢" if total_pnl >= 0 else "🔴"
             pos_badge = f"\n📊 {len(live_positions)} positions · ${total_val:.2f} · {pnl_e} ${total_pnl:+.2f}"
     except Exception:
@@ -335,6 +341,18 @@ def main():
     
     app.post_init = post_init
     
+    # Graceful shutdown: disconnect WS and cleanup
+    async def post_shutdown(application):
+        try:
+            from core.ws_client import get_ws_client
+            ws = get_ws_client()
+            await ws.disconnect()
+            print("📡 WebSocket disconnected")
+        except Exception:
+            pass
+    
+    app.post_shutdown = post_shutdown
+    
     # ═══════════════════════════════════════════════════════════════════
     # COMMAND HANDLERS
     # ═══════════════════════════════════════════════════════════════════
@@ -356,6 +374,7 @@ def main():
     app.add_handler(CommandHandler("takeprofit", takeprofit_command))
     app.add_handler(CommandHandler("lock", lock_command))
     app.add_handler(CommandHandler("mystatus", mystatus_command))
+    app.add_handler(CommandHandler("cancel", start_command))  # Global /cancel → back to menu
     
     # ═══════════════════════════════════════════════════════════════════
     # AUTH CONVERSATION HANDLERS (connect, unlock, disconnect)
@@ -577,7 +596,7 @@ def main():
     # Orders handlers (cancel_all MUST be before cancel_ to avoid pattern shadowing)
     app.add_handler(CallbackQueryHandler(order_book_callback, pattern="^orderbook$"))
     app.add_handler(CallbackQueryHandler(cancel_all_callback, pattern="^cancel_all$"))
-    app.add_handler(CallbackQueryHandler(cancel_order_callback, pattern="^cancel_"))
+    app.add_handler(CallbackQueryHandler(cancel_order_callback, pattern=r"^cancel_(?!all)"))
     
     # Alerts handlers
     app.add_handler(CallbackQueryHandler(delete_alert_callback, pattern="^del_alert_"))

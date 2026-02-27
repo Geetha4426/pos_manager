@@ -206,6 +206,10 @@ async def stoploss_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Invalid price. Use format: /stoploss market 30")
         return
     
+    if stop_price < 0.01 or stop_price > 0.99:
+        await update.message.reply_text("⚠️ Price must be between 1¢ and 99¢")
+        return
+    
     client = get_polymarket_client()
     markets = await client.search_markets(market_query, limit=1)
     
@@ -254,6 +258,10 @@ async def takeprofit_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("❌ Invalid price. Use format: /takeprofit market 80")
         return
     
+    if target_price < 0.01 or target_price > 0.99:
+        await update.message.reply_text("⚠️ Price must be between 1¢ and 99¢")
+        return
+    
     client = get_polymarket_client()
     markets = await client.search_markets(market_query, limit=1)
     
@@ -285,7 +293,11 @@ async def delete_alert_callback(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     await query.answer("🗑️ Removing alert...")
     
-    alert_id = int(query.data.replace("del_alert_", ""))
+    try:
+        alert_id = int(query.data.replace("del_alert_", ""))
+    except (ValueError, TypeError):
+        await query.edit_message_text("⚠️ Invalid alert ID.")
+        return
     
     manager = get_alert_manager()
     await manager.remove_alert(alert_id)
