@@ -2669,6 +2669,67 @@ class PolymarketClient:
             avg_price=price
         )
     
+    async def estimate_sell_execution(self, token_id: str, shares: float) -> Dict[str, float]:
+        """Estimate sell execution: VWAP, slippage, fees, net proceeds.
+        
+        Reads orderbook to calculate volume-weighted average price for
+        the given sell size. Shows what the user will actually receive.
+        
+        Returns:
+            dict with keys: vwap, slippage_pct, fee_pct, fee_usd, 
+                           gross_proceeds, net_proceeds, best_bid, book_depth
+        """
+        from core.position_manager import calc_fee
+        
+        best_bid = await self.get_best_bid(token_id)
+        if best_bid <= 0:
+            return {'vwap': 0, 'slippage_pct': 0, 'fee_pct': 0, 'fee_usd': 0,
+                    'gross_proceeds': 0, 'net_proceeds': 0, 'best_bid': 0, 'book_depth': 0}
+        
+        # Try to get full orderbook for VWAP
+        vwap = best_bid
+        book_depth_shares = 0
+        try:
+            book = await self.get_order_book(token_id, depth=20)
+            bids = book.get('bids', [])
+            if bids:
+                # Calculate VWAP across bid levels
+                remaining = shares
+                total_cost = 0.0
+                total_filled = 0.0
+                for level in bids:
+                    level_price = float(level['price'])
+                    level_size = float(level['size'])
+                    book_depth_shares += level_size
+                    fill = min(remaining, level_size)
+                    total_cost += fill * level_price
+                    total_filled += fill
+                    remaining -= fill
+                    if remaining <= 0:
+                        break
+                
+                if total_filled > 0:
+                    vwap = total_cost / total_filled
+        except Exception:
+            pass
+        
+        slippage_pct = ((best_bid - vwap) / best_bid * 100) if best_bid > 0 else 0
+        fee_pct = calc_fee(vwap) * 100  # Dynamic fee at sell price
+        gross_proceeds = vwap * shares
+        fee_usd = gross_proceeds * calc_fee(vwap)
+        net_proceeds = gross_proceeds - fee_usd
+        
+        return {
+            'vwap': vwap,
+            'slippage_pct': slippage_pct,
+            'fee_pct': fee_pct,
+            'fee_usd': fee_usd,
+            'gross_proceeds': gross_proceeds,
+            'net_proceeds': net_proceeds,
+            'best_bid': best_bid,
+            'book_depth': book_depth_shares
+        }
+    
     async def sell_market(
         self, 
         token_id: str, 
@@ -2676,12 +2737,13 @@ class PolymarketClient:
         percent: float = 100
     ) -> OrderResult:
         """
-        Execute a market sell order using FOK-first strategy.
+        Execute a market sell order with FAK-first routing.
         
-        Strategy (from 5min_trade pattern):
-        1. FOK sell at market (instant exit, no 5-share minimum)
-        2. If FOK fails → GTC limit at best bid price
-        3. If GTC fails → GTC at best bid - 1¢ (discount)
+        Strategy:
+        1. FAK sell (partial fills OK, no minimum, best for small positions)
+        2. FOK sell (all-or-nothing fallback)
+        3. GTC at best_bid (last resort for large positions ≥5 shares)
+        4. GTC at best_bid - 1¢ (desperation fallback)
         """
         if self.is_paper or not self.clob_client:
             return await self._paper_sell(token_id, shares, percent)
@@ -2713,8 +2775,9 @@ class PolymarketClient:
                 print(f"⚠️ Conditional allowance update: {e}")
             
             # ═══════════════════════════════════════════════════
-            # STEP 1: FAK sell first (partial fills OK), then FOK
+            # STEP 1: FAK sell (partial fills OK), then FOK
             # FAK is more likely to succeed than FOK (all-or-nothing)
+            # Works for any size (no 5-share minimum)
             # ═══════════════════════════════════════════════════
             if Config.ENABLE_FOK_ORDERS:
                 for order_type in (OrderType.FAK, OrderType.FOK):
@@ -2765,7 +2828,8 @@ class PolymarketClient:
                         print(f"⚠️ {ot_name} sell error: {e}, trying next...")
             
             # ═══════════════════════════════════════════════════
-            # STEP 2: GTC limit at best bid price
+            # STEP 2: GTC limit at best bid price (last resort)
+            # Only for remaining shares if FAK partially filled
             # ═══════════════════════════════════════════════════
             if Config.FOK_SELL_FALLBACK_GTC:
                 best_bid = await self.get_best_bid(token_id)

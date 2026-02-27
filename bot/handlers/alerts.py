@@ -37,7 +37,31 @@ async def alerts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(text, parse_mode='HTML')
         return
     
-    text = "🔔 <b>Active Alerts</b>\n\n"
+    text = "🔔 <b>Active Alerts</b>\n━━━━━━━━━━━━━━━━━━━━━\n\n"
+    
+    # Try to get current prices for alerts
+    current_prices = {}
+    try:
+        from core.ws_client import get_ws_client
+        ws = get_ws_client()
+        for alert in alerts:
+            snap = ws.get_snapshot(alert.token_id)
+            if snap:
+                current_prices[alert.token_id] = snap.price
+    except Exception:
+        pass
+    
+    # Also try position manager for position size info
+    position_sizes = {}
+    try:
+        from core.position_manager import get_position_manager
+        pm = get_position_manager()
+        for alert in alerts:
+            live = pm.get_position(alert.token_id)
+            if live:
+                position_sizes[alert.token_id] = live.size
+    except Exception:
+        pass
     
     buttons = []
     for alert in alerts[:8]:
@@ -47,17 +71,37 @@ async def alerts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             AlertType.TAKE_PROFIT: "🎯"
         }.get(alert.alert_type, "🔔")
         
+        type_label = {
+            AlertType.PRICE_ALERT: "Alert",
+            AlertType.STOP_LOSS: "Stop Loss",
+            AlertType.TAKE_PROFIT: "Take Profit"
+        }.get(alert.alert_type, "Alert")
+        
         direction = "⬆️" if alert.side == "above" else "⬇️"
         
-        text += f"{type_emoji} {alert.market_question[:35]}...\n"
-        text += f"   {direction} Trigger: {alert.trigger_price*100:.0f}¢\n"
+        text += f"{type_emoji} <b>{type_label}</b>\n"
+        text += f"   📋 {alert.market_question[:40]}\n"
+        text += f"   {direction} Trigger: {alert.trigger_price*100:.0f}¢"
+        
+        # Show current price if available
+        cur_price = current_prices.get(alert.token_id, 0)
+        if cur_price > 0:
+            gap = abs(cur_price - alert.trigger_price) * 100
+            text += f"  |  Now: {cur_price*100:.0f}¢ ({gap:.0f}¢ away)"
+        text += "\n"
+        
+        # Show position size if it's a SL/TP
+        pos_size = position_sizes.get(alert.token_id, 0)
+        if pos_size > 0 and alert.alert_type in (AlertType.STOP_LOSS, AlertType.TAKE_PROFIT):
+            text += f"   📦 Position: {pos_size:.1f} shares\n"
+        
         if alert.auto_trade:
-            text += f"   ⚡ Auto-trade: ${alert.trade_amount:.2f}\n"
+            text += f"   ⚡ Auto-sell on trigger\n"
         text += "\n"
         
         buttons.append([
             InlineKeyboardButton(
-                f"❌ Remove ({alert.trigger_price*100:.0f}¢)",
+                f"❌ {type_label} @ {alert.trigger_price*100:.0f}¢",
                 callback_data=f"del_alert_{alert.id}"
             )
         ])

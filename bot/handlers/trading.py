@@ -610,6 +610,20 @@ async def execute_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         event_title = event.title if event else (sub.question if sub else 'Position')
         sub_title = sub.group_item_title or sub.question if sub else ''
         
+        # Fallback when API doesn't return fill details
+        filled = result.filled_size if result.filled_size > 0 else (amount / (result.avg_price if result.avg_price > 0 else 0.5))
+        price = result.avg_price if result.avg_price > 0 else 0.5
+        cost = filled * price
+        
+        # Calculate fee estimate
+        fee_usd = 0.0
+        try:
+            from core.position_manager import calc_fee
+            fee_rate = calc_fee(price)
+            fee_usd = cost * fee_rate
+        except Exception:
+            pass
+        
         # Add to position manager for live tracking
         try:
             from core.position_manager import get_position_manager
@@ -619,9 +633,9 @@ async def execute_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 condition_id=sub.condition_id if sub else '',
                 question=event_title,
                 outcome=outcome,
-                size=result.filled_size if result.filled_size > 0 else amount / (result.avg_price if result.avg_price > 0 else 0.5),
-                avg_price=result.avg_price if result.avg_price > 0 else 0.5,
-                current_price=result.avg_price if result.avg_price > 0 else 0.5,
+                size=filled,
+                avg_price=price,
+                current_price=price,
             )
         except Exception:
             pass
@@ -632,9 +646,15 @@ async def execute_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             f"📋 {event_title}\n"
             f"🎯 {sub_title}\n"
             f"📍 {outcome}\n\n"
-            f"📦 {result.filled_size:.2f} shares @ {result.avg_price*100:.1f}¢\n"
-            f"🆔 <code>{result.order_id[:16]}...</code>\n"
+            f"📦 {filled:.2f} shares @ {price*100:.1f}¢\n"
+            f"💵 Cost     ${cost:.2f}\n"
+        )
+        if fee_usd > 0:
+            text += f"💸 Fee      ~${fee_usd:.2f}\n"
+            text += f"💰 Total    ~${cost + fee_usd:.2f}\n"
+        text += (
             f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🆔 <code>{result.order_id[:16]}...</code>\n"
             f"<i>{'📝 Paper trade' if Config.is_paper_mode() else '💱 Live trade'}</i>\n\n"
             f"/positions → view live P&L"
         )

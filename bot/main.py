@@ -39,6 +39,7 @@ from bot.handlers.positions import (
     instant_sell_callback, refresh_positions_callback,
     stop_loss_callback, take_profit_callback,
     sl_set_callback, tp_set_callback,
+    sl_pick_callback, tp_pick_callback,
     stop_loss_price_input, take_profit_price_input,
     STOP_LOSS_PRICE, TAKE_PROFIT_PRICE
 )
@@ -520,6 +521,8 @@ def main():
     app.add_handler(CallbackQueryHandler(instant_sell_callback, pattern=r"^isell_\d+_\d+$"))
     
     # Stop loss / Take profit quick set (standalone, outside conversation)
+    app.add_handler(CallbackQueryHandler(sl_pick_callback, pattern=r"^sl_pick$"))
+    app.add_handler(CallbackQueryHandler(tp_pick_callback, pattern=r"^tp_pick$"))
     app.add_handler(CallbackQueryHandler(sl_set_callback, pattern=r"^slset_\d+_\d+$"))
     app.add_handler(CallbackQueryHandler(tp_set_callback, pattern=r"^tpset_\d+_\d+$"))
     

@@ -224,13 +224,33 @@ async def position_detail_callback(update: Update, context: ContextTypes.DEFAULT
     pnl_color = "🟢" if pnl >= 0 else "🔴"
     value = best_bid * pos.size
     
-    # Calculate estimated fee on sell
+    # Calculate estimated fee on sell + fee-adjusted P&L
+    fee_pct = 0.0
+    fee_usd = 0.0
+    net_pnl = pnl
+    slippage_pct = 0.0
     try:
-        from core.position_manager import calc_fee
+        from core.position_manager import calc_fee, calc_fee_adjusted_pnl
         sell_fee = calc_fee(best_bid)
         fee_pct = sell_fee * 100
+        fee_usd = value * sell_fee
+        net_pnl = calc_fee_adjusted_pnl(pos.avg_price, best_bid, pos.size)
     except Exception:
-        fee_pct = 0
+        pass
+    
+    # Estimate slippage from orderbook (if selling 100%)
+    est_info = ""
+    try:
+        client_for_est = await require_auth(update)
+        if client_for_est and hasattr(client_for_est, 'estimate_sell_execution'):
+            est = await client_for_est.estimate_sell_execution(pos.token_id, pos.size)
+            if est.get('vwap', 0) > 0 and est['slippage_pct'] > 0.1:
+                slippage_pct = est['slippage_pct']
+                est_info = f"📉 Slippage  ~{slippage_pct:.1f}%  (book: {est['book_depth']:.0f}sh)\n"
+    except Exception:
+        pass
+    
+    net_pnl_color = "🟢" if net_pnl >= 0 else "🔴"
     
     text = (
         f"📊 <b>Position Detail</b>\n"
@@ -254,11 +274,16 @@ async def position_detail_callback(update: Update, context: ContextTypes.DEFAULT
     )
     
     if fee_pct > 0:
-        text += f"💸 Fee      {fee_pct:.2f}%\n"
+        text += f"💸 Fee      {fee_pct:.2f}% (~${fee_usd:.2f})\n"
+    if est_info:
+        text += est_info
+    if fee_pct > 0:
+        text += f"{net_pnl_color} Net P&L   ${net_pnl:+.2f}\n"
     
     text += (
         f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"<i>⚡ = FOK market sell (fastest)</i>"
+        f"🆔 <code>{pos.token_id}</code>\n"
+        f"<i>⚡ = instant market sell</i>"
     )
     
     await query.edit_message_text(
@@ -320,19 +345,39 @@ async def instant_sell_callback(update: Update, context: ContextTypes.DEFAULT_TY
         except Exception:
             pass
         
-        proceeds = result.filled_size * result.avg_price if result.avg_price > 0 else pos.value * (percent / 100)
-        pnl = (result.avg_price - pos.avg_price) * result.filled_size if result.avg_price > 0 else 0
+        # Fallback when API doesn't return fill details
+        sell_shares = pos.size * (percent / 100)
+        filled = result.filled_size if result.filled_size > 0 else sell_shares
+        price = result.avg_price if result.avg_price > 0 else pos.current_price
+        proceeds = filled * price
+        cost_basis = pos.avg_price * filled
+        pnl = proceeds - cost_basis
+        
+        # Calculate fee estimate
+        fee_usd = 0.0
+        net_proceeds = proceeds
+        try:
+            from core.position_manager import calc_fee
+            fee_rate = calc_fee(price)
+            fee_usd = proceeds * fee_rate
+            net_proceeds = proceeds - fee_usd
+        except Exception:
+            pass
+        
         pnl_emoji = "🟢" if pnl >= 0 else "🔴"
         
         text = (
             f"✅ <b>Sold Successfully</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n"
             f"📋 {pos.market_question[:50]}\n\n"
-            f"📦 Sold     {result.filled_size:.1f} shares\n"
-            f"💵 Price    {result.avg_price*100:.1f}¢\n"
+            f"📦 Sold     {filled:.2f} shares\n"
+            f"💵 Price    {price*100:.1f}¢\n"
             f"💰 Proceeds ${proceeds:.2f}\n"
-            f"{pnl_emoji} P&L      ${pnl:+.2f}\n"
         )
+        if fee_usd > 0:
+            text += f"💸 Fee      ~${fee_usd:.2f}\n"
+            text += f"💵 Net      ~${net_proceeds:.2f}\n"
+        text += f"{pnl_emoji} P&L      ${pnl:+.2f}\n"
         if result.order_id:
             text += f"━━━━━━━━━━━━━━━━━━━━━\n🆔 <code>{result.order_id[:16]}...</code>\n"
         text += f"\n<i>{'📝 Paper' if Config.is_paper_mode() else '💱 Live'}</i>"
@@ -345,10 +390,20 @@ async def instant_sell_callback(update: Update, context: ContextTypes.DEFAULT_TY
             f"<i>Try again or reduce size</i>"
         )
     
-    # Add back to positions button
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Back to Positions", callback_data="refresh_positions")]
-    ])
+    # After sell: show remaining sell options if partial, or back to positions
+    if result.success and percent < 100:
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("⚡ Sell 25%", callback_data=f"isell_{pos_index}_25"),
+                InlineKeyboardButton("⚡ Sell 50%", callback_data=f"isell_{pos_index}_50"),
+                InlineKeyboardButton("⚡ Sell 100%", callback_data=f"isell_{pos_index}_100"),
+            ],
+            [InlineKeyboardButton("📊 Back to Positions", callback_data="refresh_positions")]
+        ])
+    else:
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📊 Back to Positions", callback_data="refresh_positions")]
+        ])
     
     await query.edit_message_text(text, parse_mode='HTML', reply_markup=keyboard)
 
@@ -391,6 +446,22 @@ async def sell_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     context.user_data['sell_percent'] = percent
     
+    # Estimate fees + net proceeds
+    fee_line = ""
+    net_line = ""
+    routing_line = ""
+    try:
+        from core.position_manager import calc_fee
+        sell_fee = calc_fee(pos.current_price)
+        fee_usd = sell_value * sell_fee
+        net_proceeds = sell_value - fee_usd
+        fee_line = f"💸 Fee      ~${fee_usd:.2f} ({sell_fee*100:.2f}%)\n"
+        net_line = f"💵 Net      ~${net_proceeds:.2f}\n"
+    except Exception:
+        pass
+    
+    routing_line = "<i>⚡ FAK market sell · instant execution</i>"
+    
     text = (
         f"⚡ <b>Confirm Sell</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
@@ -400,8 +471,9 @@ async def sell_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Shares    {sell_shares:.2f}\n"
         f"Value     ${sell_value:.2f}\n"
         f"Price     {pos.current_price*100:.1f}¢\n"
+        f"{fee_line}{net_line}"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"<i>FOK market order · instant execution</i>"
+        f"{routing_line}"
     )
     
     await query.edit_message_text(
@@ -446,12 +518,41 @@ async def confirm_sell_callback(update: Update, context: ContextTypes.DEFAULT_TY
         except Exception:
             pass
         
+        # Fallback when API doesn't return fill details
+        sell_shares = pos.size * (percent / 100)
+        filled = result.filled_size if result.filled_size > 0 else sell_shares
+        price = result.avg_price if result.avg_price > 0 else pos.current_price
+        proceeds = filled * price
+        cost_basis = pos.avg_price * filled
+        pnl = proceeds - cost_basis
+        
+        fee_usd = 0.0
+        net_proceeds = proceeds
+        try:
+            from core.position_manager import calc_fee
+            fee_rate = calc_fee(price)
+            fee_usd = proceeds * fee_rate
+            net_proceeds = proceeds - fee_usd
+        except Exception:
+            pass
+        
+        pnl_emoji = "🟢" if pnl >= 0 else "🔴"
+        
         text = (
             f"✅ <b>Sell Executed</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📦 {result.filled_size:.2f} shares @ {result.avg_price*100:.1f}¢\n"
-            f"🆔 <code>{result.order_id[:16]}...</code>\n"
+            f"📋 {pos.market_question[:50]}\n\n"
+            f"📦 Sold     {filled:.2f} shares\n"
+            f"💵 Price    {price*100:.1f}¢\n"
+            f"💰 Proceeds ${proceeds:.2f}\n"
+        )
+        if fee_usd > 0:
+            text += f"💸 Fee      ~${fee_usd:.2f}\n"
+            text += f"💵 Net      ~${net_proceeds:.2f}\n"
+        text += (
+            f"{pnl_emoji} P&L      ${pnl:+.2f}\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🆔 <code>{result.order_id[:16]}...</code>\n"
             f"<i>{'📝 Paper trade' if Config.is_paper_mode() else '💱 Live trade'}</i>"
         )
     else:
@@ -471,14 +572,22 @@ async def confirm_sell_callback(update: Update, context: ContextTypes.DEFAULT_TY
             f"Error: {err}{hint}"
         )
     
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Back to Positions", callback_data="refresh_positions")]
-    ])
+    # After sell: show remaining options if partial
+    if result.success and percent < 100:
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("⚡ Sell 25%", callback_data=f"isell_{pos_index}_25"),
+                InlineKeyboardButton("⚡ Sell 50%", callback_data=f"isell_{pos_index}_50"),
+                InlineKeyboardButton("⚡ Sell 100%", callback_data=f"isell_{pos_index}_100"),
+            ],
+            [InlineKeyboardButton("📊 Back to Positions", callback_data="refresh_positions")]
+        ])
+    else:
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📊 Back to Positions", callback_data="refresh_positions")]
+        ])
     
     await query.edit_message_text(text, parse_mode='HTML', reply_markup=keyboard)
-
-
-async def custom_sell_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle custom sell percentage input."""
     try:
         percent = int(update.message.text.strip())
@@ -503,6 +612,22 @@ async def custom_sell_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         context.user_data['sell_percent'] = percent
         
+        # Estimate fees + net proceeds
+        fee_line = ""
+        net_line = ""
+        routing_line = ""
+        try:
+            from core.position_manager import calc_fee
+            sell_fee = calc_fee(pos.current_price)
+            fee_usd = sell_value * sell_fee
+            net_proceeds = sell_value - fee_usd
+            fee_line = f"💸 Fee      ~${fee_usd:.2f} ({sell_fee*100:.2f}%)\n"
+            net_line = f"💵 Net      ~${net_proceeds:.2f}\n"
+        except Exception:
+            pass
+        
+        routing_line = "<i>⚡ FAK market sell · instant execution</i>"
+        
         text = (
             f"⚡ <b>Confirm Sell</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━━\n"
@@ -511,8 +636,9 @@ async def custom_sell_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Selling   {percent}%\n"
             f"Shares    {sell_shares:.2f}\n"
             f"Value     ${sell_value:.2f}\n"
+            f"{fee_line}{net_line}"
             f"━━━━━━━━━━━━━━━━━━━━━\n"
-            f"<i>FOK market order · instant execution</i>"
+            f"{routing_line}"
         )
         
         await update.message.reply_text(
@@ -526,6 +652,58 @@ async def custom_sell_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("⚠️ Please enter a valid number (1-100)")
         return CUSTOM_SELL_PERCENT
+
+
+# ═══════════════════════════════════════════════════════════════════
+# STOP LOSS & TAKE PROFIT — Position Picker (from /positions list)
+# ═══════════════════════════════════════════════════════════════════
+
+async def sl_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show position picker for Stop Loss (from positions list)."""
+    query = update.callback_query
+    await query.answer()
+    
+    positions = context.user_data.get('positions', [])
+    if not positions:
+        await query.edit_message_text("⚠️ No active positions. Use /positions to refresh.")
+        return
+    
+    buttons = []
+    for idx, pos in enumerate(positions[:10]):
+        label = f"📉 {pos.market_question[:30]}.. ({pos.current_price*100:.0f}¢)"
+        buttons.append([InlineKeyboardButton(label, callback_data=f"sl_{idx}")])
+    buttons.append([InlineKeyboardButton("◀️ Back", callback_data="positions")])
+    
+    await query.edit_message_text(
+        "🛑 <b>Set Stop Loss</b>\n\n"
+        "Select a position to set stop-loss:",
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+
+async def tp_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show position picker for Take Profit (from positions list)."""
+    query = update.callback_query
+    await query.answer()
+    
+    positions = context.user_data.get('positions', [])
+    if not positions:
+        await query.edit_message_text("⚠️ No active positions. Use /positions to refresh.")
+        return
+    
+    buttons = []
+    for idx, pos in enumerate(positions[:10]):
+        label = f"📈 {pos.market_question[:30]}.. ({pos.current_price*100:.0f}¢)"
+        buttons.append([InlineKeyboardButton(label, callback_data=f"tp_{idx}")])
+    buttons.append([InlineKeyboardButton("◀️ Back", callback_data="positions")])
+    
+    await query.edit_message_text(
+        "🎯 <b>Set Take Profit</b>\n\n"
+        "Select a position to set take-profit:",
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════
